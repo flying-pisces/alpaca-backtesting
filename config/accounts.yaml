@@ -1,0 +1,18 @@
+# Account → algo mapping. Alpaca caps paper accounts per user at ~3, so we
+# split the 5 algos across 2 buckets by DTE / risk profile.
+#
+# Keys for each account are loaded from .env via the variable names below —
+# we deliberately do NOT put secrets in this file.
+
+accounts:
+  - id: account_a
+    name: Aggressive
+    description: Short-DTE, high-turnover strategies
+    env_prefix: ALPACA_ACCOUNT_A
+    algos: [degen, surge, moderate]
+
+  - id: account_b
+    name: Conservative
+    description: Long-DTE, capital-preservation strategies
+    env_prefix: ALPACA_ACCOUNT_B
+    algos: [sentinel, fortress]

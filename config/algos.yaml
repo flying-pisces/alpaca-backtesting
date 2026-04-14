@@ -1,0 +1,73 @@
+# Algorithm registry. Source: market_pulse/docs/ALGO_REFERENCE.md (2026-04-12).
+# To add a new algo later: append an entry here + map it to an account in accounts.yaml.
+
+algos:
+  - id: degen
+    name: Degen
+    emoji: "🚀"
+    risk: highest
+    sharpe_target: 0.4
+    dte_min: 0
+    dte_max: 7
+    pop_range: [0.25, 0.45]
+    position_size_pct: 0.01
+    universe: catalyst_tickers
+    pgi_gate: catalyst_only
+    strategies: [long_call_otm, long_put_otm, long_straddle, put_backspread, iron_fly_0dte, long_call_0dte, long_put_0dte]
+    enabled: true
+
+  - id: surge
+    name: Surge
+    emoji: "🔥"
+    risk: high
+    sharpe_target: 0.7
+    dte_min: 7
+    dte_max: 21
+    pop_range: [0.45, 0.65]
+    position_size_pct: 0.02
+    universe: sp500_plus_momentum
+    pgi_gate: "|pgi|>30"
+    strategies: [bull_call_spread, bear_put_spread, long_strangle, call_butterfly, stock_tight_stop]
+    enabled: true
+
+  - id: moderate
+    name: Moderate
+    emoji: "⚖️"
+    risk: balanced
+    sharpe_target: 1.1
+    dte_min: 21
+    dte_max: 45
+    pop_range: [0.65, 0.80]
+    position_size_pct: 0.05
+    universe: sp500_plus_etfs
+    pgi_gate: full_range
+    strategies: [bull_put_spread, bear_call_spread, iron_condor, csp, stock_stop]
+    enabled: true
+
+  - id: sentinel
+    name: Sentinel
+    emoji: "🛡️"
+    risk: low
+    sharpe_target: 1.4
+    dte_min: 45
+    dte_max: 90
+    pop_range: [0.78, 0.90]
+    position_size_pct: 0.05
+    universe: [SPY, QQQ, AAPL, MSFT, NVDA]
+    pgi_gate: "|pgi|>50 and 3/4 agree"
+    strategies: [covered_call, collar, csp_deep_otm, wide_bull_put, long_call_condor]
+    enabled: true
+
+  - id: fortress
+    name: Fortress
+    emoji: "🏦"
+    risk: lowest
+    sharpe_target: 1.6
+    dte_min: 90
+    dte_max: 365
+    pop_range: [0.80, 0.92]
+    position_size_pct: 0.05
+    universe: [SPY, QQQ, AAPL, MSFT, NVDA]
+    pgi_gate: "|pgi|<15"
+    strategies: [leaps_call, covered_call, protective_put, collar_zero_cost, csp_deep_otm_90d]
+    enabled: true
