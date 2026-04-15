@@ -26,6 +26,7 @@ if str(_SRC) not in sys.path:
 
 
 try:
+    import os
     import pandas as pd
     from alpaca_dashboard.alpaca_client import AlpacaMultiClient
     from alpaca_dashboard.settings import algo_to_account, load_accounts, load_algos
@@ -38,7 +39,30 @@ except Exception:   # noqa: BLE001
 
 
 st.set_page_config(page_title="Alpaca Algo Dashboard", layout="wide", page_icon="📊")
-store.init_db()
+
+# Init Turso/SQLite. On failure, show a concrete diagnostic page so we can
+# see what's wrong (URL shape, token presence, response body) rather than
+# Streamlit's generic redacted traceback.
+try:
+    store.init_db()
+except Exception as init_err:   # noqa: BLE001
+    st.error(f"⚠️ store.init_db() crashed: `{type(init_err).__name__}`")
+    st.code(str(init_err), language="text")
+    st.caption("Diagnostic — Turso env shape (values redacted):")
+    turso_url = os.getenv("TURSO_DATABASE_URL", "")
+    turso_tok = os.getenv("TURSO_AUTH_TOKEN", "")
+    st.json({
+        "TURSO_DATABASE_URL_set": bool(turso_url),
+        "TURSO_DATABASE_URL_prefix": turso_url[:40] + ("…" if len(turso_url) > 40 else ""),
+        "TURSO_DATABASE_URL_len": len(turso_url),
+        "TURSO_AUTH_TOKEN_set": bool(turso_tok),
+        "TURSO_AUTH_TOKEN_len": len(turso_tok),
+        "using_turso_detected": store.using_turso(),
+        "DASHBOARD_DB_PATH": os.getenv("DASHBOARD_DB_PATH", "data/backtest.db"),
+    })
+    st.caption("Full traceback:")
+    st.code(traceback.format_exc(), language="python")
+    st.stop()
 
 ACCOUNTS = load_accounts()
 ALGOS = load_algos()
