@@ -1,5 +1,14 @@
 # Algorithm registry. Source: market_pulse/docs/ALGO_REFERENCE.md (2026-04-12).
 # To add a new algo later: append an entry here + map it to an account in accounts.yaml.
+#
+# status:
+#   ready   — strategy selector implemented, backtester can run
+#   planned — scaffolded only; UI shows "coming soon" and /Admin blocks Run
+#
+# When promoting a planned algo to ready:
+#   1. Wire its risk tier into market_pulse select_strategy_for_tier (or fork
+#      it into this repo's strategies/ package).
+#   2. Flip status: ready and enabled: true.
 
 algos:
   - id: degen
@@ -71,3 +80,49 @@ algos:
     pgi_gate: "|pgi|<15"
     strategies: [leaps_call, covered_call, protective_put, collar_zero_cost, csp_deep_otm_90d]
     enabled: true
+
+  # ── Planned algos — account live, strategy selector TBD ─────────────────────
+  - id: reddit_play
+    name: Reddit Play
+    emoji: "👽"
+    risk: speculative
+    sharpe_target: 0.5
+    dte_min: 1
+    dte_max: 14
+    pop_range: [0.30, 0.55]
+    position_size_pct: 0.01
+    universe: reddit_wsb_trending
+    pgi_gate: "sentiment_spike & volume_unusual"
+    strategies: []
+    enabled: false
+    status: planned
+
+  - id: er_play
+    name: ER Play
+    emoji: "📣"
+    risk: high
+    sharpe_target: 0.8
+    dte_min: 1
+    dte_max: 30
+    pop_range: [0.40, 0.70]
+    position_size_pct: 0.02
+    universe: earnings_this_week
+    pgi_gate: "pre_er_window | post_er_iv_crush"
+    strategies: []
+    enabled: false
+    status: planned
+
+  - id: dividend_play
+    name: Dividend Play
+    emoji: "💸"
+    risk: low
+    sharpe_target: 1.0
+    dte_min: 30
+    dte_max: 120
+    pop_range: [0.65, 0.85]
+    position_size_pct: 0.05
+    universe: dividend_aristocrats
+    pgi_gate: "pre_ex_div_window & yield>3%"
+    strategies: []
+    enabled: false
+    status: planned

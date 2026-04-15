@@ -1,26 +1,31 @@
-"""Streamlit dashboard entrypoint.
+"""Streamlit entrypoint — home / overview page.
 
 Run: ``streamlit run src/alpaca_dashboard/app.py``
+
+Routes:
+    /               this file (live account overview)
+    /Dashboard      backtest results (pages/1_Dashboard.py)
+    /Admin          run jobs, tune coefficients (pages/2_Admin.py)
 """
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
 
-from .alpaca_client import AlpacaMultiClient
-from .settings import algo_to_account, load_accounts, load_algos
+from alpaca_dashboard.alpaca_client import AlpacaMultiClient
+from alpaca_dashboard.settings import algo_to_account, load_accounts, load_algos
+from alpaca_dashboard import store
 
 st.set_page_config(page_title="Alpaca Algo Dashboard", layout="wide", page_icon="📊")
+store.init_db()
 
 ACCOUNTS = load_accounts()
 ALGOS = load_algos()
 ALGO_ACC = algo_to_account(ACCOUNTS)
 CLIENT = AlpacaMultiClient(ACCOUNTS)
 
-
-# ───────────────────────── sidebar ─────────────────────────
 st.sidebar.title("📊 Alpaca Algo Dashboard")
-page = st.sidebar.radio("View", ["Overview", "Accounts", "Algos", "Orders"])
+st.sidebar.caption("Home · **Dashboard** · **Admin**  (see page list above)")
 
 with st.sidebar.expander("Configuration status", expanded=False):
     for acc in ACCOUNTS:
@@ -29,23 +34,26 @@ with st.sidebar.expander("Configuration status", expanded=False):
         if not ok:
             st.caption(f"Missing `{acc.env_prefix}_KEY` / `_SECRET` in .env")
 
+# ── overview ──────────────────────────────────────────────────────────────────
+st.header("Live paper accounts")
 
-# ───────────────────────── pages ─────────────────────────
-def page_overview() -> None:
-    st.header("Overview")
+snapshots = []
+for a in ACCOUNTS:
+    try:
+        snapshots.append(CLIENT.snapshot(a.id))
+    except Exception as e:
+        st.error(f"{a.name}: {e}")
+        snapshots.append(None)
 
-    snapshots = [CLIENT.snapshot(a.id) for a in ACCOUNTS]
-    configured = [s for s in snapshots if s]
-
-    if not configured:
-        st.warning("No accounts configured. Add keys to `.env` and reload.")
-        return
-
+configured = [s for s in snapshots if s]
+if not configured:
+    st.warning("No accounts configured. Add keys to `.env` and reload.")
+else:
     cols = st.columns(len(configured))
     for col, snap in zip(cols, configured):
         with col:
             st.metric(
-                label=f"{snap.name}",
+                label=snap.name,
                 value=f"${snap.equity:,.2f}",
                 delta=f"{snap.pct_change_today:+.2f}%",
             )
@@ -54,104 +62,35 @@ def page_overview() -> None:
                 f"{snap.positions_count} pos · {snap.status}"
             )
 
-    st.divider()
-    st.subheader("Algo → Account mapping")
-    rows = [
-        {
-            "Algo": f"{a.emoji} {a.name}",
-            "Risk": a.risk,
-            "DTE": f"{a.dte_min}–{a.dte_max}",
-            "Size %": f"{a.position_size_pct*100:.1f}%",
-            "Account": ALGO_ACC[a.id].name if a.id in ALGO_ACC else "—",
-            "Enabled": "✅" if a.enabled else "⏸",
-        }
-        for a in ALGOS
-    ]
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+st.divider()
+
+ready_algos = [a for a in ALGOS if a.is_ready]
+planned_algos = [a for a in ALGOS if not a.is_ready]
 
 
-def page_accounts() -> None:
-    st.header("Accounts")
-
-    tabs = st.tabs([a.name for a in ACCOUNTS])
-    for tab, acc in zip(tabs, ACCOUNTS):
-        with tab:
-            st.caption(acc.description)
-            snap = CLIENT.snapshot(acc.id)
-            if not snap:
-                st.info(f"No credentials for {acc.name}. Set `{acc.env_prefix}_KEY/_SECRET` in `.env`.")
-                continue
-
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Equity", f"${snap.equity:,.2f}", f"{snap.pct_change_today:+.2f}%")
-            c2.metric("Cash", f"${snap.cash:,.2f}")
-            c3.metric("Buying power", f"${snap.buying_power:,.2f}")
-            c4.metric("Positions", snap.positions_count)
-
-            st.subheader("Positions")
-            positions = CLIENT.positions(acc.id)
-            if positions:
-                df = pd.DataFrame(positions)
-                cols = [c for c in [
-                    "symbol", "qty", "side", "avg_entry_price", "current_price",
-                    "market_value", "unrealized_pl", "unrealized_plpc",
-                ] if c in df.columns]
-                st.dataframe(df[cols], use_container_width=True, hide_index=True)
-            else:
-                st.caption("No open positions.")
+def _algo_row(a) -> dict:
+    return {
+        "Algo": f"{a.emoji} {a.name}",
+        "Risk": a.risk,
+        "DTE": f"{a.dte_min}–{a.dte_max}",
+        "Size %": f"{a.position_size_pct*100:.1f}%",
+        "Sharpe target": f"{a.sharpe_target:.2f}",
+        "Account": ALGO_ACC[a.id].name if a.id in ALGO_ACC else "—",
+        "Status": "✅ ready" if a.is_ready else "🟡 planned",
+    }
 
 
-def page_algos() -> None:
-    st.header("Algos")
+st.subheader(f"Ready algos · {len(ready_algos)}")
+st.dataframe(pd.DataFrame([_algo_row(a) for a in ready_algos]),
+             use_container_width=True, hide_index=True)
 
-    for algo in ALGOS:
-        with st.expander(f"{algo.emoji} {algo.name}  ·  {algo.risk}  ·  {algo.dte_min}–{algo.dte_max} DTE", expanded=False):
-            acc = ALGO_ACC.get(algo.id)
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Sharpe target", f"{algo.sharpe_target:.2f}")
-            c2.metric("PoP range", f"{algo.pop_range[0]*100:.0f}–{algo.pop_range[1]*100:.0f}%")
-            c3.metric("Position size", f"{algo.position_size_pct*100:.1f}%")
+if planned_algos:
+    st.subheader(f"Planned algos · {len(planned_algos)}")
+    st.caption("Accounts are live, strategy selectors TBD. Admin run-buttons are disabled.")
+    st.dataframe(pd.DataFrame([_algo_row(a) for a in planned_algos]),
+                 use_container_width=True, hide_index=True)
 
-            st.write(f"**Account:** {acc.name if acc else '—'}")
-            st.write(f"**PGI gate:** `{algo.pgi_gate}`")
-            st.write(f"**Universe:** `{algo.universe}`")
-            st.write("**Strategies:** " + ", ".join(f"`{s}`" for s in algo.strategies))
-
-            # Per-algo order count (from live Alpaca, filtered by client_order_id prefix)
-            if acc and acc.is_configured:
-                orders = CLIENT.orders(acc.id, status="all", limit=500)
-                algo_orders = [
-                    o for o in orders
-                    if CLIENT.algo_from_client_order_id(o.get("client_order_id")) == algo.id
-                ]
-                st.caption(f"{len(algo_orders)} orders attributed to this algo.")
-
-
-def page_orders() -> None:
-    st.header("Orders")
-
-    acc_id = st.selectbox("Account", [a.id for a in ACCOUNTS], format_func=lambda x: CLIENT.account(x).name)
-    status = st.selectbox("Status", ["all", "open", "closed"], index=0)
-    limit = st.slider("Limit", 10, 500, 100, step=10)
-
-    orders = CLIENT.orders(acc_id, status=status, limit=limit)
-    if not orders:
-        st.info("No orders found.")
-        return
-
-    df = pd.DataFrame(orders)
-    df["algo"] = df.get("client_order_id", pd.Series()).map(CLIENT.algo_from_client_order_id)
-    cols = [c for c in [
-        "submitted_at", "symbol", "side", "qty", "filled_qty",
-        "order_type", "status", "filled_avg_price", "algo", "client_order_id",
-    ] if c in df.columns]
-    st.dataframe(df[cols], use_container_width=True, hide_index=True)
-
-
-PAGES = {
-    "Overview": page_overview,
-    "Accounts": page_accounts,
-    "Algos": page_algos,
-    "Orders": page_orders,
-}
-PAGES[page]()
+st.divider()
+c1, c2 = st.columns(2)
+c1.info("📈 **Dashboard** — per-algo backtest results, equity curves, trade log.")
+c2.info("⚙️ **Admin** — run/stop algo backtests, push pulses, tune coefficients.")

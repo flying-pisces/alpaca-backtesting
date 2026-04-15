@@ -1,0 +1,273 @@
+"""Backtest data store — local SQLite by default, Turso (libsql) when
+``TURSO_DATABASE_URL`` is set.
+
+Schema:
+  pulses            — one row per simulated trade outcome
+  coefficients      — algo-level tunable knobs (overrides from /admin)
+  jobs              — admin-triggered backtest runs (status + summary)
+
+Both drivers are DB-API 2.0 compatible; we avoid ``sqlite3.Row`` so row access
+looks the same on either backend (``_rows``/``_row`` helpers zip column names
+from ``cursor.description``).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime
+from typing import Any, Iterable
+
+from .settings import db_path
+
+log = logging.getLogger(__name__)
+
+
+def _turso_url() -> str:
+    return (os.getenv("TURSO_DATABASE_URL") or "").strip()
+
+
+def _turso_token() -> str:
+    return (os.getenv("TURSO_AUTH_TOKEN") or "").strip()
+
+
+def using_turso() -> bool:
+    return bool(_turso_url())
+
+
+def _connect():
+    """Return a DB-API connection for the active backend."""
+    if using_turso():
+        try:
+            import libsql_experimental as libsql  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                "TURSO_DATABASE_URL is set but libsql-experimental is not installed. "
+                "Run: pip install libsql-experimental"
+            ) from e
+        kwargs: dict[str, Any] = {"database": _turso_url()}
+        token = _turso_token()
+        if token:
+            kwargs["auth_token"] = token
+        return libsql.connect(**kwargs)
+
+    p = db_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(p, timeout=30, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def _rows(cur) -> list[dict]:
+    cols = [d[0] for d in cur.description] if cur.description else []
+    return [dict(zip(cols, r)) for r in cur.fetchall()]
+
+
+def _row(cur) -> dict | None:
+    cols = [d[0] for d in cur.description] if cur.description else []
+    r = cur.fetchone()
+    return dict(zip(cols, r)) if r else None
+
+
+@contextmanager
+def cursor():
+    conn = _connect()
+    try:
+        yield conn
+        # libsql requires explicit commit; local sqlite uses isolation_level=None
+        # (auto-commit) but a second commit() is a harmless no-op.
+        try:
+            conn.commit()
+        except Exception:
+            pass
+    finally:
+        conn.close()
+
+
+# ── Schema ────────────────────────────────────────────────────────────────────
+
+_SCHEMA = [
+    """
+    CREATE TABLE IF NOT EXISTS pulses (
+        pulse_id        TEXT PRIMARY KEY,
+        algo_id         TEXT NOT NULL,
+        ticker          TEXT NOT NULL,
+        pulse_type      TEXT,
+        strategy_label  TEXT,
+        entry_date      TEXT NOT NULL,
+        entry_price     REAL,
+        expiry          TEXT,
+        dte             INTEGER,
+        pgi             REAL,
+        sigma           REAL,
+        status          TEXT,
+        outcome         TEXT,
+        outcome_price   REAL,
+        outcome_pnl_pct REAL,
+        selection_reason TEXT,
+        job_id          TEXT,
+        created_at      TEXT DEFAULT (datetime('now'))
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_pulses_algo   ON pulses(algo_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_ticker ON pulses(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_entry  ON pulses(entry_date)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_job    ON pulses(job_id)",
+    """
+    CREATE TABLE IF NOT EXISTS coefficients (
+        algo_id    TEXT PRIMARY KEY,
+        payload    TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS jobs (
+        job_id     TEXT PRIMARY KEY,
+        algo_id    TEXT,
+        status     TEXT NOT NULL,
+        started_at TEXT,
+        ended_at   TEXT,
+        params     TEXT,
+        summary    TEXT,
+        error      TEXT
+    )
+    """,
+]
+
+
+def init_db() -> None:
+    with cursor() as c:
+        for stmt in _SCHEMA:
+            c.execute(stmt)
+
+
+# ── Pulses ────────────────────────────────────────────────────────────────────
+
+_PULSE_COLS = [
+    "pulse_id", "algo_id", "ticker", "pulse_type", "strategy_label",
+    "entry_date", "entry_price", "expiry", "dte", "pgi", "sigma",
+    "status", "outcome", "outcome_price", "outcome_pnl_pct",
+    "selection_reason", "job_id",
+]
+
+
+def save_pulse(row: dict[str, Any]) -> None:
+    values = tuple(row.get(col) for col in _PULSE_COLS)
+    placeholders = ",".join("?" * len(_PULSE_COLS))
+    with cursor() as c:
+        c.execute(
+            f"INSERT OR REPLACE INTO pulses ({','.join(_PULSE_COLS)}) "
+            f"VALUES ({placeholders})",
+            values,
+        )
+
+
+def save_pulses(rows: Iterable[dict[str, Any]]) -> int:
+    n = 0
+    for r in rows:
+        save_pulse(r)
+        n += 1
+    return n
+
+
+def pulses_for_algo(algo_id: str, limit: int = 5000) -> list[dict]:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT * FROM pulses WHERE algo_id = ? ORDER BY entry_date DESC LIMIT ?",
+            (algo_id, limit),
+        )
+        return _rows(cur)
+
+
+def all_pulses(limit: int = 20000) -> list[dict]:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT * FROM pulses ORDER BY entry_date DESC LIMIT ?",
+            (limit,),
+        )
+        return _rows(cur)
+
+
+def delete_pulses_for_algo(algo_id: str) -> int:
+    with cursor() as c:
+        cur = c.execute("DELETE FROM pulses WHERE algo_id = ?", (algo_id,))
+        return cur.rowcount or 0
+
+
+def delete_all_pulses() -> int:
+    with cursor() as c:
+        cur = c.execute("DELETE FROM pulses")
+        return cur.rowcount or 0
+
+
+# ── Coefficients ──────────────────────────────────────────────────────────────
+
+def get_coefficients(algo_id: str) -> dict[str, Any]:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT payload FROM coefficients WHERE algo_id = ?", (algo_id,)
+        )
+        row = _row(cur)
+    return json.loads(row["payload"]) if row else {}
+
+
+def set_coefficients(algo_id: str, payload: dict[str, Any]) -> None:
+    with cursor() as c:
+        c.execute(
+            """
+            INSERT INTO coefficients(algo_id, payload, updated_at)
+            VALUES (?, ?, datetime('now'))
+            ON CONFLICT(algo_id) DO UPDATE SET
+                payload = excluded.payload,
+                updated_at = excluded.updated_at
+            """,
+            (algo_id, json.dumps(payload)),
+        )
+
+
+# ── Jobs ──────────────────────────────────────────────────────────────────────
+
+def create_job(job_id: str, algo_id: str | None, params: dict) -> None:
+    with cursor() as c:
+        c.execute(
+            """
+            INSERT INTO jobs(job_id, algo_id, status, started_at, params)
+            VALUES (?, ?, 'running', ?, ?)
+            """,
+            (job_id, algo_id, datetime.utcnow().isoformat(), json.dumps(params)),
+        )
+
+
+def update_job(job_id: str, **fields: Any) -> None:
+    if not fields:
+        return
+    sets = ", ".join(f"{k} = ?" for k in fields)
+    params = tuple(list(fields.values()) + [job_id])
+    with cursor() as c:
+        c.execute(f"UPDATE jobs SET {sets} WHERE job_id = ?", params)
+
+
+def finish_job(job_id: str, summary: dict | None = None, error: str | None = None) -> None:
+    update_job(
+        job_id,
+        status="error" if error else "done",
+        ended_at=datetime.utcnow().isoformat(),
+        summary=json.dumps(summary) if summary else None,
+        error=error,
+    )
+
+
+def list_jobs(limit: int = 50) -> list[dict]:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT * FROM jobs ORDER BY started_at DESC LIMIT ?", (limit,)
+        )
+        return _rows(cur)
+
+
+def get_job(job_id: str) -> dict | None:
+    with cursor() as c:
+        cur = c.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+        return _row(cur)

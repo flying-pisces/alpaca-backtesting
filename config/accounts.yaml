@@ -1,18 +1,59 @@
-# Account → algo mapping. Alpaca caps paper accounts per user at ~3, so we
-# split the 5 algos across 2 buckets by DTE / risk profile.
+# One algo per Alpaca paper account. Secrets come from .env via env_prefix.
 #
-# Keys for each account are loaded from .env via the variable names below —
-# we deliberately do NOT put secrets in this file.
+# Login split (for humans — the dashboard does not care):
+#   Login 1 (chuckyeyin@gmail.com):  degen, surge
+#   Login 2 (secondary):             moderate, sentinel, fortress
 
 accounts:
-  - id: account_a
-    name: Aggressive
-    description: Short-DTE, high-turnover strategies
-    env_prefix: ALPACA_ACCOUNT_A
-    algos: [degen, surge, moderate]
+  - id: degen
+    name: Degen
+    description: Ultra short-DTE / highest risk
+    env_prefix: ALPACA_DEGEN
+    algos: [degen]
 
-  - id: account_b
-    name: Conservative
-    description: Long-DTE, capital-preservation strategies
-    env_prefix: ALPACA_ACCOUNT_B
-    algos: [sentinel, fortress]
+  - id: surge
+    name: Surge
+    description: Short-DTE / high risk / momentum
+    env_prefix: ALPACA_SURGE
+    algos: [surge]
+
+  - id: moderate
+    name: Moderate
+    description: Mid-DTE / balanced
+    env_prefix: ALPACA_MODERATE
+    algos: [moderate]
+
+  - id: sentinel
+    name: Sentinel
+    description: Long-DTE / low risk / capital preservation
+    env_prefix: ALPACA_SENTINEL
+    algos: [sentinel]
+
+  - id: fortress
+    name: Fortress
+    description: LEAPS / lowest risk / multi-quarter
+    env_prefix: ALPACA_FORTRESS
+    algos: [fortress]
+
+  # ── Planned algos (login 3 — mlc2048@gmail.com) ──────────────────────────
+  # These accounts are live (you can view equity/positions in the dashboard)
+  # but their strategy selectors are not implemented yet. Admin-page /Run
+  # buttons are disabled until the algo's status in algos.yaml is "ready".
+
+  - id: reddit_play
+    name: Reddit Play
+    description: Retail-sentiment driven (social scrape → position) — PLANNED
+    env_prefix: ALPACA_REDDIT_PLAY
+    algos: [reddit_play]
+
+  - id: er_play
+    name: ER Play
+    description: Earnings-release event trade (pre/post ER) — PLANNED
+    env_prefix: ALPACA_ER_PLAY
+    algos: [er_play]
+
+  - id: dividend_play
+    name: Dividend Play
+    description: Dividend capture around ex-div date — PLANNED
+    env_prefix: ALPACA_DIVIDEND_PLAY
+    algos: [dividend_play]

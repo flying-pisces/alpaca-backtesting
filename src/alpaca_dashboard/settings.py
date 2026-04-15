@@ -55,6 +55,11 @@ class AlgoConfig:
     pgi_gate: str
     strategies: list[str]
     enabled: bool
+    status: str = "ready"     # "ready" | "planned"
+
+    @property
+    def is_ready(self) -> bool:
+        return self.status == "ready"
 
 
 def load_algos() -> list[AlgoConfig]:
@@ -74,6 +79,7 @@ def load_algos() -> list[AlgoConfig]:
             pgi_gate=a["pgi_gate"],
             strategies=list(a["strategies"]),
             enabled=bool(a.get("enabled", True)),
+            status=str(a.get("status", "ready")),
         )
         for a in raw["algos"]
     ]
