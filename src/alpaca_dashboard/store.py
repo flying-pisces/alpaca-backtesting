@@ -37,21 +37,104 @@ def using_turso() -> bool:
     return bool(_turso_url())
 
 
+# ── Turso HTTP-pipeline driver ────────────────────────────────────────────────
+#
+# We talk to Turso directly over its public ``POST /v2/pipeline`` endpoint
+# (Hrana-over-HTTP). This avoids the libsql-experimental Rust/cmake build
+# (no wheel on Streamlit Cloud) and the libsql-client sync wrapper's
+# event-loop quirks. The only runtime dep is ``requests``.
+
+_TURSO_TYPE_MAP = {int: "integer", float: "float", str: "text", bytes: "blob"}
+
+
+def _encode_arg(v: Any) -> dict:
+    if v is None:
+        return {"type": "null", "value": None}
+    if isinstance(v, bool):
+        return {"type": "integer", "value": "1" if v else "0"}
+    if isinstance(v, int):
+        return {"type": "integer", "value": str(v)}
+    if isinstance(v, float):
+        return {"type": "float", "value": v}
+    return {"type": "text", "value": str(v)}
+
+
+def _decode_val(cell: dict) -> Any:
+    t = cell.get("type")
+    v = cell.get("value")
+    if t == "null":
+        return None
+    if t == "integer":
+        return int(v) if v is not None else None
+    if t == "float":
+        return float(v) if v is not None else None
+    return v
+
+
+def _turso_execute(sql: str, params=()) -> dict:
+    import requests  # lazy import
+
+    url = _turso_url().replace("libsql://", "https://", 1).rstrip("/") + "/v2/pipeline"
+    token = _turso_token()
+    body = {
+        "requests": [
+            {"type": "execute", "stmt": {
+                "sql": sql,
+                "args": [_encode_arg(p) for p in (params or [])],
+            }},
+            {"type": "close"},
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    r = requests.post(url, json=body, headers=headers, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    first = data["results"][0]
+    if first.get("type") == "error":
+        err = first.get("error", {})
+        raise RuntimeError(f"Turso error: {err.get('message') or err}")
+    return first["response"]["result"]
+
+
+class _TursoCursor:
+    """sqlite3-cursor-like view over a Turso pipeline ``execute`` result."""
+
+    def __init__(self, result: dict):
+        cols = result.get("cols") or []
+        self.description = [(c.get("name"),) for c in cols] if cols else None
+        self.rowcount = int(result.get("affected_row_count") or 0)
+        self._rows = [
+            tuple(_decode_val(cell) for cell in row)
+            for row in (result.get("rows") or [])
+        ]
+
+    def fetchall(self):
+        return list(self._rows)
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+class _TursoConn:
+    """sqlite3-connection-like wrapper; each ``execute`` opens one pipeline."""
+
+    def execute(self, sql: str, params=()):
+        return _TursoCursor(_turso_execute(sql, params))
+
+    def commit(self):
+        pass  # Turso pipeline auto-commits each execute
+
+    def close(self):
+        pass
+
+
 def _connect():
-    """Return a DB-API connection for the active backend."""
+    """Return a DB-API-compatible connection for the active backend."""
     if using_turso():
-        try:
-            import libsql_experimental as libsql  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(
-                "TURSO_DATABASE_URL is set but libsql-experimental is not installed. "
-                "Run: pip install libsql-experimental"
-            ) from e
-        kwargs: dict[str, Any] = {"database": _turso_url()}
-        token = _turso_token()
-        if token:
-            kwargs["auth_token"] = token
-        return libsql.connect(**kwargs)
+        return _TursoConn()
 
     p = db_path()
     p.parent.mkdir(parents=True, exist_ok=True)

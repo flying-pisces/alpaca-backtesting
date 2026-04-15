@@ -7,4 +7,4 @@ pyyaml>=6.0.2
 sqlalchemy>=2.0.0
 scipy>=1.11.0
 numpy>=1.26.0
-libsql-experimental>=0.0.40
+requests>=2.31.0
