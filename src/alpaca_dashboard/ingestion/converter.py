@@ -85,7 +85,12 @@ def to_market_pulse_row(our_row: dict[str, Any]) -> dict[str, Any]:
     strat = _strategy_fields(our_row.get("top_rec_json"))
 
     entry_date = our_row.get("entry_date")
-    if entry_date:
+    # Live pulses stamp ``generated_at`` explicitly (second precision).
+    # Backtest pulses only have ``entry_date`` (day precision) — fall back to
+    # midnight of that date.
+    if our_row.get("generated_at"):
+        generated_at = our_row["generated_at"]
+    elif entry_date:
         generated_at = f"{entry_date}T00:00:00Z"
     else:
         generated_at = datetime.utcnow().isoformat() + "Z"

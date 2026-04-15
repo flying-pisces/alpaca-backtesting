@@ -243,6 +243,7 @@ _ADD_COLUMN_MIGRATIONS = [
     "ALTER TABLE pulses ADD COLUMN indicators_json TEXT",
     "ALTER TABLE pulses ADD COLUMN market_regime   TEXT",
     "ALTER TABLE pulses ADD COLUMN cap_bucket      TEXT",
+    "ALTER TABLE pulses ADD COLUMN generated_at    TEXT",
     "ALTER TABLE ingestion_cursors ADD COLUMN last_pushed_pulse_id TEXT",
 ]
 
@@ -281,6 +282,7 @@ _PULSE_COLS = [
     "status", "outcome", "outcome_price", "outcome_pnl_pct",
     "selection_reason", "job_id",
     "top_rec_json", "indicators_json", "market_regime", "cap_bucket",
+    "generated_at",
 ]
 
 

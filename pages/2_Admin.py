@@ -21,8 +21,8 @@ if str(_SRC) not in sys.path:
 import pandas as pd
 import streamlit as st
 
-from alpaca_dashboard import jobs, store
-from alpaca_dashboard.backtest import DEFAULT_TICKERS
+from alpaca_dashboard import jobs, live_engine, store
+from alpaca_dashboard.backtest import ALGOS as READY_ALGO_IDS, DEFAULT_TICKERS
 from alpaca_dashboard.settings import load_accounts, load_algos
 
 st.set_page_config(page_title="Admin · Run algos", layout="wide", page_icon="⚙️")
@@ -222,6 +222,104 @@ if all_jobs:
     st.dataframe(jt, width="stretch", hide_index=True)
 else:
     st.caption("No jobs in this session yet.")
+
+# ── Live engine ──────────────────────────────────────────────────────────────
+st.divider()
+st.header("🔴 Live engine — Go Live Pulses")
+st.caption(
+    "Scans the universe every N seconds and emits pulses tagged "
+    "`go_live_<algo>`. Shares the same schema as backtest pulses; "
+    "ingestion converter handles both. Feed is on **/Live**."
+)
+
+engine_state = live_engine.state_snapshot()
+
+le_c1, le_c2, le_c3 = st.columns([3, 2, 2])
+with le_c1:
+    live_tickers_text = st.text_area(
+        "Tickers",
+        value=",".join(engine_state["tickers"]),
+        height=80,
+        key="live_tickers",
+    )
+    live_tickers = [t.strip().upper() for t in live_tickers_text.split(",") if t.strip()]
+    live_algos = st.multiselect(
+        "Ready algos to scan",
+        options=READY_ALGO_IDS,
+        default=engine_state["algos"] or READY_ALGO_IDS,
+        key="live_algos",
+    )
+with le_c2:
+    cycle_sec = st.slider(
+        "Cycle (seconds between full scans)",
+        min_value=30, max_value=1800,
+        value=int(engine_state["cycle_sec"]),
+        step=30,
+    )
+    dedup_sec = st.slider(
+        "Dedup window (seconds)",
+        min_value=60, max_value=7200,
+        value=int(engine_state["dedup_sec"]),
+        step=60,
+    )
+with le_c3:
+    dot = "🟢 running" if engine_state["running"] else "⚪️ stopped"
+    st.markdown(f"### {dot}")
+    st.caption(
+        f"last cycle: {(engine_state['last_cycle_at'] or '—')[:19].replace('T',' ')} · "
+        f"+{engine_state['last_cycle_generated']} new / "
+        f"{engine_state['last_cycle_skipped_dedup']} dedup"
+    )
+    st.caption(
+        f"total: {engine_state['total_generated']} pulses · "
+        f"{engine_state['total_cycles']} cycles · "
+        f"cache hit {engine_state['cache'].get('hit_rate', 0)*100:.0f}%"
+    )
+
+btn_c1, btn_c2, btn_c3 = st.columns(3)
+with btn_c1:
+    if st.button(
+        "▶ Start engine",
+        type="primary",
+        disabled=engine_state["running"] or not live_tickers or not live_algos,
+        width="stretch",
+    ):
+        live_engine.start(
+            tickers=live_tickers,
+            algos=live_algos,
+            cycle_sec=cycle_sec,
+            dedup_sec=dedup_sec,
+        )
+        st.toast(f"🔴 Live engine started — {len(live_algos)} algos × {len(live_tickers)} tickers")
+        time.sleep(0.3)
+        st.rerun()
+with btn_c2:
+    if st.button(
+        "⏹ Stop engine",
+        disabled=not engine_state["running"],
+        width="stretch",
+    ):
+        live_engine.stop()
+        st.toast("engine stopping…")
+        time.sleep(0.3)
+        st.rerun()
+with btn_c3:
+    if st.button("🔄 Run one cycle now", width="stretch"):
+        with st.spinner("scanning universe…"):
+            # Apply current UI values even if not fully started
+            live_engine._STATE.tickers = live_tickers or live_engine._STATE.tickers
+            live_engine._STATE.algos = live_algos or live_engine._STATE.algos
+            r = live_engine.run_once()
+        st.success(
+            f"+{r['generated']} new · {r['skipped']} deduped · "
+            f"{r['errors']} errors"
+        )
+        time.sleep(0.4)
+        st.rerun()
+
+if engine_state.get("last_error"):
+    st.error(f"last engine error: {engine_state['last_error']}")
+
 
 # ── Push to market_pulse ─────────────────────────────────────────────────────
 from alpaca_dashboard.ingestion import SqliteDestination, push as push_to_market_pulse

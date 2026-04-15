@@ -20,7 +20,7 @@ if str(_SRC) not in sys.path:
 
 import streamlit as st
 
-from alpaca_dashboard import jobs, store
+from alpaca_dashboard import jobs, live_engine, store
 from alpaca_dashboard.backtest import DEFAULT_TICKERS
 from alpaca_dashboard.settings import load_algos
 
@@ -36,6 +36,17 @@ st.title("🎮 Remote Control")
 st.caption(
     "Tap an algo to fire one pulse batch. Batches run in the background — "
     "you can close the tab; they keep going. Live status below."
+)
+
+# Live engine status strip — at-a-glance whether continuous pulse
+# generation is on.
+_engine = live_engine.state_snapshot()
+_dot = "🔴 **LIVE** running" if _engine["running"] else "⚪️ live engine stopped"
+st.info(
+    f"{_dot} · last cycle: "
+    f"{(_engine['last_cycle_at'] or '—')[:19].replace('T',' ')} · "
+    f"{_engine['total_generated']} total pulses emitted · "
+    f"(controls on /Admin · feed on /Live)"
 )
 
 live_jobs = {j["algo_id"]: j for j in jobs.snapshot() if j["alive"]}
