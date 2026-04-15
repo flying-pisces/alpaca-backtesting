@@ -223,6 +223,77 @@ if all_jobs:
 else:
     st.caption("No jobs in this session yet.")
 
+# ── Push to market_pulse ─────────────────────────────────────────────────────
+from alpaca_dashboard.ingestion import SqliteDestination, push as push_to_market_pulse
+
+st.divider()
+st.header("📤 Push pulses to market_pulse")
+st.caption(
+    "Stream new backtest pulses from Turso into market_pulse's DB. "
+    "Idempotent: only new rows since the last push are sent. "
+    "Cursor and last-run status are persisted per destination."
+)
+
+push_c1, push_c2 = st.columns([3, 2])
+with push_c1:
+    dest_path = st.text_input(
+        "market_pulse pulses.db path",
+        value="~/projects/market_pulse/pulses.db",
+        help="Local path to market_pulse's SQLite file. Writes via INSERT OR "
+             "IGNORE so re-running is safe.",
+    )
+    push_algo = st.selectbox(
+        "Restrict to algo (optional)",
+        options=["(all)"] + [a.id for a in ALGOS if a.is_ready],
+        index=0,
+    )
+    push_reset = st.checkbox(
+        "Reset cursor (ignore last-pushed position — use for initial backfill)",
+        value=False,
+    )
+
+with push_c2:
+    try:
+        dest_preview = SqliteDestination(dest_path)
+        ok, msg = dest_preview.healthcheck()
+        if ok:
+            st.success(f"Destination reachable · {msg[:60]}")
+        else:
+            st.error(f"Destination check: {msg}")
+    except Exception as e:
+        st.error(f"Bad path: {e}")
+        ok = False
+
+    existing_cursor = store.get_ingestion_cursor(
+        f"sqlite:{Path(dest_path).expanduser().resolve()}"
+    )
+    if existing_cursor:
+        st.caption(
+            f"Last push: **{existing_cursor.get('last_pushed_count', 0)}** rows · "
+            f"cursor `{(existing_cursor.get('last_pushed_created_at') or '')[:19]}`"
+        )
+    else:
+        st.caption("No prior push to this destination.")
+
+    run_push = st.button("▶ Push now", type="primary", disabled=not ok)
+
+if run_push:
+    with st.spinner("pushing…"):
+        result = push_to_market_pulse(
+            SqliteDestination(dest_path),
+            algo_id=None if push_algo == "(all)" else push_algo,
+            batch_size=200,
+            reset_cursor=push_reset,
+        )
+    if result.error:
+        st.error(f"Push failed: {result.error}")
+    else:
+        st.success(
+            f"Pushed {result.total_written}/{result.total_read} rows in "
+            f"{result.batches} batches · {result.elapsed_sec:.1f}s"
+        )
+    st.json(result.as_dict())
+
 # Auto-refresh while anything is running
 if any(j["alive"] for j in all_jobs):
     time.sleep(2)

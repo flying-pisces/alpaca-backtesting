@@ -1,0 +1,84 @@
+# Market-cap classification. Used to tag each backtest pulse with a
+# ``cap_bucket`` so results can be sliced by large/mid/small.
+#
+# Source: S&P 500 mega-caps as of 2026-Q1 + common ETFs. The default for
+# unlisted tickers is "large" (since our default universe is mostly
+# mega-cap). Add a ticker to "mid" or "small" to override.
+#
+# The bucket is a coarse label, not an exact market-cap threshold. Keep
+# the list short and curated.
+
+large:
+  # Index ETFs
+  - SPY
+  - QQQ
+  - DIA
+  - IWM     # Russell 2000 ETF — it's large as a vehicle even though its holdings are small-cap
+  - VTI
+  - VOO
+
+  # Mega-cap tech
+  - AAPL
+  - MSFT
+  - NVDA
+  - GOOGL
+  - GOOG
+  - AMZN
+  - META
+  - TSLA
+
+  # Semi / chip
+  - AMD
+  - AVGO
+  - QCOM
+  - INTC
+  - MU
+
+  # Finance
+  - JPM
+  - GS
+  - BAC
+  - MS
+  - WFC
+  - V
+  - MA
+
+  # Energy / industrials
+  - XOM
+  - CVX
+  - BA
+  - CAT
+  - GE
+
+  # Consumer / retail
+  - HD
+  - WMT
+  - COST
+  - NKE
+  - DIS
+  - MCD
+  - SBUX
+
+  # Healthcare / pharma
+  - UNH
+  - JNJ
+  - PFE
+  - ABBV
+  - MRK
+  - LLY
+  - TMO
+
+  # Comms / media
+  - NFLX
+  - CRM
+  - CMCSA
+  - T
+  - VZ
+
+  # Payments
+  - PYPL
+  - SQ
+
+mid: []
+
+small: []

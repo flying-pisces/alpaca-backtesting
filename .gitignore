@@ -24,3 +24,7 @@ data/*.csv
 .idea/
 .vscode/
 *.log
+
+# Reference copy of the sibling market_pulse repo — for Claude/IDE only,
+# never commit. Source of truth lives at ~/projects/market_pulse.
+ref/

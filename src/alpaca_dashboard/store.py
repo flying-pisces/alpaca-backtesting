@@ -176,38 +176,48 @@ def cursor():
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
-_SCHEMA = [
+_SCHEMA_TABLES = [
     """
     CREATE TABLE IF NOT EXISTS pulses (
-        pulse_id        TEXT PRIMARY KEY,
-        algo_id         TEXT NOT NULL,
-        ticker          TEXT NOT NULL,
-        pulse_type      TEXT,
-        strategy_label  TEXT,
-        entry_date      TEXT NOT NULL,
-        entry_price     REAL,
-        expiry          TEXT,
-        dte             INTEGER,
-        pgi             REAL,
-        sigma           REAL,
-        status          TEXT,
-        outcome         TEXT,
-        outcome_price   REAL,
-        outcome_pnl_pct REAL,
+        pulse_id         TEXT PRIMARY KEY,
+        algo_id          TEXT NOT NULL,
+        ticker           TEXT NOT NULL,
+        pulse_type       TEXT,
+        strategy_label   TEXT,
+        entry_date       TEXT NOT NULL,
+        entry_price      REAL,
+        expiry           TEXT,
+        dte              INTEGER,
+        pgi              REAL,
+        sigma            REAL,
+        status           TEXT,
+        outcome          TEXT,
+        outcome_price    REAL,
+        outcome_pnl_pct  REAL,
         selection_reason TEXT,
-        job_id          TEXT,
-        created_at      TEXT DEFAULT (datetime('now'))
+        job_id           TEXT,
+        top_rec_json     TEXT,
+        indicators_json  TEXT,
+        market_regime    TEXT,
+        cap_bucket       TEXT,
+        created_at       TEXT DEFAULT (datetime('now'))
     )
     """,
-    "CREATE INDEX IF NOT EXISTS idx_pulses_algo   ON pulses(algo_id)",
-    "CREATE INDEX IF NOT EXISTS idx_pulses_ticker ON pulses(ticker)",
-    "CREATE INDEX IF NOT EXISTS idx_pulses_entry  ON pulses(entry_date)",
-    "CREATE INDEX IF NOT EXISTS idx_pulses_job    ON pulses(job_id)",
     """
     CREATE TABLE IF NOT EXISTS coefficients (
         algo_id    TEXT PRIMARY KEY,
         payload    TEXT NOT NULL,
         updated_at TEXT DEFAULT (datetime('now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ingestion_cursors (
+        destination            TEXT PRIMARY KEY,
+        last_pushed_created_at TEXT,
+        last_pushed_pulse_id   TEXT,
+        last_pushed_count      INTEGER DEFAULT 0,
+        last_error             TEXT,
+        updated_at             TEXT DEFAULT (datetime('now'))
     )
     """,
     """
@@ -225,9 +235,41 @@ _SCHEMA = [
 ]
 
 
+# Columns added to `pulses` in later migrations. Keep idempotent — each
+# ALTER TABLE is wrapped in try/except because SQLite/libsql don't support
+# `ADD COLUMN IF NOT EXISTS`.
+_ADD_COLUMN_MIGRATIONS = [
+    "ALTER TABLE pulses ADD COLUMN top_rec_json    TEXT",
+    "ALTER TABLE pulses ADD COLUMN indicators_json TEXT",
+    "ALTER TABLE pulses ADD COLUMN market_regime   TEXT",
+    "ALTER TABLE pulses ADD COLUMN cap_bucket      TEXT",
+    "ALTER TABLE ingestion_cursors ADD COLUMN last_pushed_pulse_id TEXT",
+]
+
+_SCHEMA_INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_pulses_algo   ON pulses(algo_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_ticker ON pulses(ticker)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_entry  ON pulses(entry_date)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_job    ON pulses(job_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_regime ON pulses(market_regime)",
+    "CREATE INDEX IF NOT EXISTS idx_pulses_cap    ON pulses(cap_bucket)",
+]
+
+
 def init_db() -> None:
     with cursor() as c:
-        for stmt in _SCHEMA:
+        # 1. Tables (idempotent via IF NOT EXISTS).
+        for stmt in _SCHEMA_TABLES:
+            c.execute(stmt)
+        # 2. Add-column migrations (idempotent via try/except — SQLite/libsql
+        #    have no `ADD COLUMN IF NOT EXISTS`).
+        for stmt in _ADD_COLUMN_MIGRATIONS:
+            try:
+                c.execute(stmt)
+            except Exception:
+                pass
+        # 3. Indexes last — some reference newly-added columns.
+        for stmt in _SCHEMA_INDEXES:
             c.execute(stmt)
 
 
@@ -238,6 +280,7 @@ _PULSE_COLS = [
     "entry_date", "entry_price", "expiry", "dte", "pgi", "sigma",
     "status", "outcome", "outcome_price", "outcome_pnl_pct",
     "selection_reason", "job_id",
+    "top_rec_json", "indicators_json", "market_regime", "cap_bucket",
 ]
 
 
@@ -288,6 +331,79 @@ def delete_all_pulses() -> int:
     with cursor() as c:
         cur = c.execute("DELETE FROM pulses")
         return cur.rowcount or 0
+
+
+def pulses_since(
+    since_created_at: str | None = None,
+    since_pulse_id: str | None = None,
+    algo_id: str | None = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Paginated read for the ingestion pipeline.
+
+    Uses a **composite cursor** ``(created_at, pulse_id)`` because
+    ``created_at`` has second precision, so many pulses written in the
+    same backtest batch share a timestamp. Sorting + filtering on
+    ``(created_at, pulse_id)`` gives a total order so no row is skipped.
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    if since_created_at and since_pulse_id:
+        clauses.append("(created_at > ? OR (created_at = ? AND pulse_id > ?))")
+        params.extend([since_created_at, since_created_at, since_pulse_id])
+    elif since_created_at:
+        clauses.append("created_at > ?")
+        params.append(since_created_at)
+    if algo_id:
+        clauses.append("algo_id = ?")
+        params.append(algo_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    with cursor() as c:
+        cur = c.execute(
+            f"SELECT * FROM pulses{where} "
+            f"ORDER BY created_at ASC, pulse_id ASC LIMIT ?",
+            tuple(params),
+        )
+        return _rows(cur)
+
+
+# ── Ingestion cursors ────────────────────────────────────────────────────────
+
+def get_ingestion_cursor(destination: str) -> dict | None:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT * FROM ingestion_cursors WHERE destination = ?",
+            (destination,),
+        )
+        return _row(cur)
+
+
+def set_ingestion_cursor(
+    destination: str,
+    last_pushed_created_at: str,
+    last_pushed_count: int,
+    last_pushed_pulse_id: str | None = None,
+    last_error: str | None = None,
+) -> None:
+    with cursor() as c:
+        c.execute(
+            """
+            INSERT INTO ingestion_cursors(
+                destination, last_pushed_created_at, last_pushed_pulse_id,
+                last_pushed_count, last_error, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, datetime('now'))
+            ON CONFLICT(destination) DO UPDATE SET
+                last_pushed_created_at = excluded.last_pushed_created_at,
+                last_pushed_pulse_id   = excluded.last_pushed_pulse_id,
+                last_pushed_count      = excluded.last_pushed_count,
+                last_error             = excluded.last_error,
+                updated_at             = excluded.updated_at
+            """,
+            (destination, last_pushed_created_at, last_pushed_pulse_id,
+             last_pushed_count, last_error),
+        )
 
 
 # ── Coefficients ──────────────────────────────────────────────────────────────

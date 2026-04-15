@@ -23,7 +23,10 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Callable
 
+import json
+
 from . import store
+from .classify import build_regime_series, classify_cap, classify_regime
 from .historical_data import fetch_history
 from .strategies import select_strategy_for_tier
 
@@ -77,6 +80,20 @@ def _compute_hv(closes: list[float], window: int = 20) -> float:
     if len(returns) < 5:
         return 0.22
     return statistics.stdev(returns) * math.sqrt(252)
+
+
+def _json_safe(obj):
+    """Best-effort conversion of strategy-dict contents (which may contain
+    ``datetime.date`` or similar) into JSON-serialisable primitives."""
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    if isinstance(obj, (date, datetime)):
+        return obj.isoformat()
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(v) for v in obj]
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    return str(obj)
 
 
 def _compute_pgi(closes: list[float], idx: int) -> float:
@@ -210,6 +227,20 @@ def run_single_algo(p: BacktestParams) -> dict:
     pgi_entry = float(coefs.get("pgi_entry", DEFAULT_PGI_ENTRY))
     size_mult = float(coefs.get("size_mult", DEFAULT_SIZE_MULT))  # noqa: F841 (metadata)
 
+    # Fetch SPY once per run and precompute the regime table so tagging each
+    # pulse is O(1). If SPY fetch fails the run still proceeds — we just tag
+    # everything as "range" rather than block the backtest.
+    regime_series: dict = {}
+    spy_hist = fetch_history("SPY", p.days + 260)   # +260 for the 200-SMA window
+    if spy_hist and spy_hist.get("close"):
+        spy_closes = spy_hist["close"]
+        spy_n = len(spy_closes)
+        today = date.today()
+        spy_dates = [today - timedelta(days=spy_n - 1 - i) for i in range(spy_n)]
+        regime_series = build_regime_series(spy_closes, spy_dates)
+    else:
+        log.warning("SPY history fetch failed — pulses will be tagged regime='range'")
+
     signals: list[dict] = []
     aborted = False
 
@@ -290,6 +321,29 @@ def run_single_algo(p: BacktestParams) -> dict:
                     S, strat, fut_c, max_bars=actual_dte,
                 )
 
+            # Regime + cap tagging (look-ahead-free: regime_series is built
+            # from SPY data; at entry_date we only use SPY up-to-and-including
+            # that date so no information leak).
+            regime = classify_regime(regime_series, entry_date)
+            cap = classify_cap(ticker)
+
+            # Snapshot the indicator values that drove this signal — lets us
+            # later replay the same pulse against a different indicator blend
+            # without re-running the backtest.
+            rsi_series_up_to_now = _compute_rsi(closes[:idx + 1])
+            rsi14_now = rsi_series_up_to_now[idx] if idx < len(rsi_series_up_to_now) else float("nan")
+            sma20 = sum(closes[idx - 19:idx + 1]) / 20 if idx >= 19 else float("nan")
+            sma50 = sum(closes[idx - 49:idx + 1]) / 50 if idx >= 49 else float("nan")
+            indicators = {
+                "pgi": pgi,
+                "rsi14": None if math.isnan(rsi14_now) else round(rsi14_now, 2),
+                "sma20": None if math.isnan(sma20) else round(sma20, 2),
+                "sma50": None if math.isnan(sma50) else round(sma50, 2),
+                "hv20": round(_compute_hv(closes[:idx + 1]), 4),
+                "mom20": round((S - sma20) / sma20, 4) if sma20 and not math.isnan(sma20) else None,
+                "mom50": round((S - sma50) / sma50, 4) if sma50 and not math.isnan(sma50) else None,
+            }
+
             pulse_id = f"bt_{p.algo_id}_{ticker}_{entry_date.strftime('%Y%m%d')}_{uuid.uuid4().hex[:6]}"
             row = {
                 "pulse_id": pulse_id,
@@ -309,6 +363,10 @@ def run_single_algo(p: BacktestParams) -> dict:
                 "outcome_pnl_pct": round(pnl_pct, 2),
                 "selection_reason": (strat.get("selection_reason") or "")[:200],
                 "job_id": job_id,
+                "top_rec_json": json.dumps(_json_safe(strat)),
+                "indicators_json": json.dumps(indicators),
+                "market_regime": regime,
+                "cap_bucket": cap,
             }
             store.save_pulse(row)
             signals.append(row)
