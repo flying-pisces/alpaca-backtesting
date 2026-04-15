@@ -90,7 +90,12 @@ def _turso_execute(sql: str, params=()) -> dict:
         headers["Authorization"] = f"Bearer {token}"
 
     r = requests.post(url, json=body, headers=headers, timeout=30)
-    r.raise_for_status()
+    if not r.ok:
+        # Surface Turso's actual error body — r.raise_for_status() eats it
+        raise RuntimeError(
+            f"Turso HTTP {r.status_code}: {r.text[:500]} "
+            f"(url={url!r}, token_len={len(token)}, sql_preview={sql[:100]!r})"
+        )
     data = r.json()
     first = data["results"][0]
     if first.get("type") == "error":
