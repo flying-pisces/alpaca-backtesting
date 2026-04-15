@@ -1,9 +1,3 @@
-# store.py version marker — bump to force Streamlit Cloud to re-import this
-# module when only downstream files have changed (Cloud's hot-reload only
-# picks up directly-changed files, so cross-file additions like
-# ``get_ingestion_cursor`` can go unnoticed by the already-warm process).
-STORE_VERSION = "2026-04-15.2"
-
 """Backtest data store — local SQLite by default, Turso (libsql) when
 ``TURSO_DATABASE_URL`` is set.
 
@@ -17,6 +11,13 @@ looks the same on either backend (``_rows``/``_row`` helpers zip column names
 from ``cursor.description``).
 """
 from __future__ import annotations
+
+# Version marker — bump any time this module changes in a way where a
+# warm Streamlit Cloud process might still have a stale cached copy.
+# Cloud's hot-reload only touches files present in the commit diff, so
+# cross-file additions (e.g. new helpers used only by downstream pages)
+# can go unnoticed. The marker keeps this file in every such diff.
+STORE_VERSION = "2026-04-15.3"
 
 import json
 import logging
