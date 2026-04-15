@@ -82,13 +82,13 @@ def _algo_row(a) -> dict:
 
 st.subheader(f"Ready algos · {len(ready_algos)}")
 st.dataframe(pd.DataFrame([_algo_row(a) for a in ready_algos]),
-             use_container_width=True, hide_index=True)
+             width="stretch", hide_index=True)
 
 if planned_algos:
     st.subheader(f"Planned algos · {len(planned_algos)}")
     st.caption("Accounts are live, strategy selectors TBD. Admin run-buttons are disabled.")
     st.dataframe(pd.DataFrame([_algo_row(a) for a in planned_algos]),
-                 use_container_width=True, hide_index=True)
+                 width="stretch", hide_index=True)
 
 st.divider()
 c1, c2 = st.columns(2)

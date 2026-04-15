@@ -219,7 +219,7 @@ if all_jobs:
         }
         for j in all_jobs
     ])
-    st.dataframe(jt, use_container_width=True, hide_index=True)
+    st.dataframe(jt, width="stretch", hide_index=True)
 else:
     st.caption("No jobs in this session yet.")
 

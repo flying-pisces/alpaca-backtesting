@@ -116,7 +116,7 @@ fig = px.line(view_sorted, x="entry_date", y="cum_pnl", color="algo_id",
               labels={"cum_pnl": "Cumulative P&L (%)", "entry_date": "Entry"},
               height=420)
 fig.update_layout(legend_title_text="Algo", hovermode="x unified")
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # ── Drawdown per algo ────────────────────────────────────────────────────────
 st.subheader("Drawdown (%)")
@@ -136,7 +136,7 @@ if drawdown_frames:
                      height=320)
     fig_dd.update_layout(hovermode="x unified",
                          yaxis_title="Drawdown (%)")
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width="stretch")
 
 # ── Strategy breakdown ───────────────────────────────────────────────────────
 st.subheader("Strategy breakdown")
@@ -150,7 +150,7 @@ strat_stats = (
 )
 st.dataframe(
     strat_stats.round({"win_rate": 1, "avg_pnl": 2}),
-    use_container_width=True, hide_index=True,
+    width="stretch", hide_index=True,
 )
 
 # ── Win rate heatmap (algo × ticker) ─────────────────────────────────────────
@@ -170,7 +170,7 @@ if view["ticker"].nunique() <= 40:
             colorbar=dict(title="WR %"),
         ))
         fig_hm.update_layout(height=max(240, 40 * len(pivot.index)))
-        st.plotly_chart(fig_hm, use_container_width=True)
+        st.plotly_chart(fig_hm, width="stretch")
 
 # ── Trade log ────────────────────────────────────────────────────────────────
 st.subheader("Trade log")
@@ -179,7 +179,7 @@ show = view[[
     "dte", "pgi", "entry_price", "outcome", "outcome_price",
     "outcome_pnl_pct", "job_id",
 ]].sort_values("entry_date", ascending=False)
-st.dataframe(show, use_container_width=True, hide_index=True, height=420)
+st.dataframe(show, width="stretch", hide_index=True, height=420)
 
 csv = show.to_csv(index=False).encode("utf-8")
 st.download_button("Download CSV", csv, file_name="backtest_trades.csv", mime="text/csv")
