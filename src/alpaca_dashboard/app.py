@@ -9,6 +9,8 @@ Routes:
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+
 import pandas as pd
 import streamlit as st
 
@@ -34,36 +36,7 @@ with st.sidebar.expander("Configuration status", expanded=False):
         if not ok:
             st.caption(f"Missing `{acc.env_prefix}_KEY` / `_SECRET` in .env")
 
-# ── overview ──────────────────────────────────────────────────────────────────
-st.header("Live paper accounts")
-
-snapshots = []
-for a in ACCOUNTS:
-    try:
-        snapshots.append(CLIENT.snapshot(a.id))
-    except Exception as e:
-        st.error(f"{a.name}: {e}")
-        snapshots.append(None)
-
-configured = [s for s in snapshots if s]
-if not configured:
-    st.warning("No accounts configured. Add keys to `.env` and reload.")
-else:
-    cols = st.columns(len(configured))
-    for col, snap in zip(cols, configured):
-        with col:
-            st.metric(
-                label=snap.name,
-                value=f"${snap.equity:,.2f}",
-                delta=f"{snap.pct_change_today:+.2f}%",
-            )
-            st.caption(
-                f"Cash ${snap.cash:,.0f} · BP ${snap.buying_power:,.0f} · "
-                f"{snap.positions_count} pos · {snap.status}"
-            )
-
-st.divider()
-
+# ── Algo → account tables render first (zero API calls) ──────────────────────
 ready_algos = [a for a in ALGOS if a.is_ready]
 planned_algos = [a for a in ALGOS if not a.is_ready]
 
@@ -94,3 +67,49 @@ st.divider()
 c1, c2 = st.columns(2)
 c1.info("📈 **Dashboard** — per-algo backtest results, equity curves, trade log.")
 c2.info("⚙️ **Admin** — run/stop algo backtests, push pulses, tune coefficients.")
+st.divider()
+
+# ── Live Alpaca snapshots — parallel with per-call timeout ───────────────────
+st.header("Live paper accounts")
+
+configured = [a for a in ACCOUNTS if a.is_configured]
+if not configured:
+    st.warning("No accounts configured. Add keys to `.env` and reload.")
+else:
+    @st.cache_data(ttl=60, show_spinner=False)
+    def _snapshot(acc_id: str):
+        """Fetch one account snapshot. Cached for 60 s so reruns are cheap."""
+        return CLIENT.snapshot(acc_id)
+
+    snaps: dict[str, object] = {}
+    errors: dict[str, str] = {}
+
+    with st.spinner("Fetching live balances…"):
+        with ThreadPoolExecutor(max_workers=len(configured)) as ex:
+            futures = {ex.submit(_snapshot, a.id): a for a in configured}
+            for fut in as_completed(futures, timeout=15):
+                a = futures[fut]
+                try:
+                    snaps[a.id] = fut.result(timeout=5)
+                except Exception as e:   # noqa: BLE001
+                    errors[a.id] = f"{type(e).__name__}: {e}"
+
+    # Render in the original account order so the grid is stable
+    cols = st.columns(max(1, len(configured)))
+    for col, acc in zip(cols, configured):
+        with col:
+            snap = snaps.get(acc.id)
+            if snap is None:
+                err = errors.get(acc.id, "no response")
+                st.metric(label=acc.name, value="—")
+                st.caption(f"⚠️ {err[:60]}")
+                continue
+            st.metric(
+                label=snap.name,
+                value=f"${snap.equity:,.2f}",
+                delta=f"{snap.pct_change_today:+.2f}%",
+            )
+            st.caption(
+                f"Cash ${snap.cash:,.0f} · BP ${snap.buying_power:,.0f} · "
+                f"{snap.positions_count} pos · {snap.status}"
+            )
