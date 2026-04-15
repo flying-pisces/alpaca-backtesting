@@ -362,9 +362,22 @@ with push_c2:
         st.error(f"Bad path: {e}")
         ok = False
 
-    existing_cursor = store.get_ingestion_cursor(
-        f"sqlite:{Path(dest_path).expanduser().resolve()}"
-    )
+    # Guard against stale module cache on Streamlit Cloud — diagnostic path
+    # prints what attrs `store` actually has if ``get_ingestion_cursor`` is
+    # missing, so we can see whether the module really is stale.
+    existing_cursor = None
+    try:
+        existing_cursor = store.get_ingestion_cursor(
+            f"sqlite:{Path(dest_path).expanduser().resolve()}"
+        )
+    except AttributeError:
+        names = [n for n in dir(store) if not n.startswith("_")]
+        st.warning(
+            "⚠️ store module missing `get_ingestion_cursor` — stale import. "
+            f"Attrs: `{', '.join(names[:20])}{'…' if len(names) > 20 else ''}`"
+        )
+    except Exception as e:   # noqa: BLE001
+        st.error(f"cursor lookup failed: {type(e).__name__}: {e}")
     if existing_cursor:
         st.caption(
             f"Last push: **{existing_cursor.get('last_pushed_count', 0)}** rows · "
