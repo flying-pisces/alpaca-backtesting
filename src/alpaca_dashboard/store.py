@@ -1,3 +1,9 @@
+# store.py version marker — bump to force Streamlit Cloud to re-import this
+# module when only downstream files have changed (Cloud's hot-reload only
+# picks up directly-changed files, so cross-file additions like
+# ``get_ingestion_cursor`` can go unnoticed by the already-warm process).
+STORE_VERSION = "2026-04-15.2"
+
 """Backtest data store — local SQLite by default, Turso (libsql) when
 ``TURSO_DATABASE_URL`` is set.
 
