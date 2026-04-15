@@ -25,8 +25,15 @@ if str(_SRC) not in sys.path:
 
 import streamlit as st
 
-from alpaca_dashboard import live_engine, store
-from alpaca_dashboard.settings import load_algos
+try:
+    from alpaca_dashboard import live_engine, store
+    from alpaca_dashboard.settings import load_algos
+except Exception:   # noqa: BLE001
+    import traceback
+    st.set_page_config(page_title="Live · error", layout="wide", page_icon="🔴")
+    st.error("⚠️ /Live page failed to import — traceback:")
+    st.code(traceback.format_exc(), language="python")
+    st.stop()
 
 st.set_page_config(page_title="Go Live Pulses", layout="wide", page_icon="🔴")
 store.init_db()
