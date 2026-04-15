@@ -1,8 +1,8 @@
 """Streamlit Cloud entrypoint.
 
-Streamlit Cloud auto-detects ``streamlit_app.py`` at the repo root, so we
-keep this file at the top level and import the real home page from the
-``alpaca_dashboard`` package under ``src/``.
+Streamlit reruns this file on every interaction, so we call ``render()``
+explicitly rather than relying on module-import side effects (imports are
+cached in ``sys.modules`` and don't re-execute on rerun).
 """
 from __future__ import annotations
 
@@ -13,6 +13,6 @@ _SRC = Path(__file__).resolve().parent / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# Import the home page module — running its top-level code is what Streamlit
-# actually renders, so we call the renderer directly.
-from alpaca_dashboard import app  # noqa: E402,F401  (side-effect import)
+from alpaca_dashboard.app import render  # noqa: E402
+
+render()

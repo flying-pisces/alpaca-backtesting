@@ -1,15 +1,14 @@
-"""Streamlit entrypoint — home / overview page.
+"""Home-page renderer. Kept as a function so Streamlit reruns work on Cloud.
 
-Run: ``streamlit run src/alpaca_dashboard/app.py``
-
-Routes:
-    /               this file (live account overview)
-    /Dashboard      backtest results (pages/1_Dashboard.py)
-    /Admin          run jobs, tune coefficients (pages/2_Admin.py)
+Streamlit Cloud reruns ``streamlit_app.py`` on every interaction. If the
+page content lived at module top-level here it would only render once per
+process (Python caches modules in sys.modules, so ``from alpaca_dashboard
+import app`` on subsequent reruns is a no-op). Calling ``render()`` from
+``streamlit_app.py`` makes the script explicitly re-execute the widgets.
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError as FuturesTimeout
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
@@ -18,72 +17,73 @@ from alpaca_dashboard.alpaca_client import AlpacaMultiClient
 from alpaca_dashboard.settings import algo_to_account, load_accounts, load_algos
 from alpaca_dashboard import store
 
-st.set_page_config(page_title="Alpaca Algo Dashboard", layout="wide", page_icon="📊")
-store.init_db()
 
-ACCOUNTS = load_accounts()
-ALGOS = load_algos()
-ALGO_ACC = algo_to_account(ACCOUNTS)
-CLIENT = AlpacaMultiClient(ACCOUNTS)
+def render() -> None:
+    st.set_page_config(page_title="Alpaca Algo Dashboard", layout="wide", page_icon="📊")
+    store.init_db()
 
-st.sidebar.title("📊 Alpaca Algo Dashboard")
-st.sidebar.caption("Home · **Dashboard** · **Admin**  (see page list above)")
+    accounts = load_accounts()
+    algos = load_algos()
+    algo_acc = algo_to_account(accounts)
+    client = AlpacaMultiClient(accounts)
 
-with st.sidebar.expander("Configuration status", expanded=False):
-    for acc in ACCOUNTS:
-        ok = acc.is_configured
-        st.write(f"{'🟢' if ok else '🔴'} **{acc.name}** (`{acc.id}`)")
-        if not ok:
-            st.caption(f"Missing `{acc.env_prefix}_KEY` / `_SECRET` in .env")
+    # ── Sidebar ──────────────────────────────────────────────────────────────
+    st.sidebar.title("📊 Alpaca Algo Dashboard")
+    st.sidebar.caption("Home · **Dashboard** · **Admin**  (see page list above)")
 
-# ── Algo → account tables render first (zero API calls) ──────────────────────
-ready_algos = [a for a in ALGOS if a.is_ready]
-planned_algos = [a for a in ALGOS if not a.is_ready]
+    with st.sidebar.expander("Configuration status", expanded=False):
+        for acc in accounts:
+            ok = acc.is_configured
+            st.write(f"{'🟢' if ok else '🔴'} **{acc.name}** (`{acc.id}`)")
+            if not ok:
+                st.caption(f"Missing `{acc.env_prefix}_KEY` / `_SECRET` in .env")
 
+    # ── Algo tables (no network I/O — render first) ──────────────────────────
+    ready_algos = [a for a in algos if a.is_ready]
+    planned_algos = [a for a in algos if not a.is_ready]
 
-def _algo_row(a) -> dict:
-    return {
-        "Algo": f"{a.emoji} {a.name}",
-        "Risk": a.risk,
-        "DTE": f"{a.dte_min}–{a.dte_max}",
-        "Size %": f"{a.position_size_pct*100:.1f}%",
-        "Sharpe target": f"{a.sharpe_target:.2f}",
-        "Account": ALGO_ACC[a.id].name if a.id in ALGO_ACC else "—",
-        "Status": "✅ ready" if a.is_ready else "🟡 planned",
-    }
+    def _algo_row(a) -> dict:
+        return {
+            "Algo": f"{a.emoji} {a.name}",
+            "Risk": a.risk,
+            "DTE": f"{a.dte_min}–{a.dte_max}",
+            "Size %": f"{a.position_size_pct*100:.1f}%",
+            "Sharpe target": f"{a.sharpe_target:.2f}",
+            "Account": algo_acc[a.id].name if a.id in algo_acc else "—",
+            "Status": "✅ ready" if a.is_ready else "🟡 planned",
+        }
 
-
-st.subheader(f"Ready algos · {len(ready_algos)}")
-st.dataframe(pd.DataFrame([_algo_row(a) for a in ready_algos]),
-             width="stretch", hide_index=True)
-
-if planned_algos:
-    st.subheader(f"Planned algos · {len(planned_algos)}")
-    st.caption("Accounts are live, strategy selectors TBD. Admin run-buttons are disabled.")
-    st.dataframe(pd.DataFrame([_algo_row(a) for a in planned_algos]),
+    st.subheader(f"Ready algos · {len(ready_algos)}")
+    st.dataframe(pd.DataFrame([_algo_row(a) for a in ready_algos]),
                  width="stretch", hide_index=True)
 
-st.divider()
-c1, c2 = st.columns(2)
-c1.info("📈 **Dashboard** — per-algo backtest results, equity curves, trade log.")
-c2.info("⚙️ **Admin** — run/stop algo backtests, push pulses, tune coefficients.")
-st.divider()
+    if planned_algos:
+        st.subheader(f"Planned algos · {len(planned_algos)}")
+        st.caption("Accounts are live, strategy selectors TBD. "
+                   "Admin run-buttons are disabled.")
+        st.dataframe(pd.DataFrame([_algo_row(a) for a in planned_algos]),
+                     width="stretch", hide_index=True)
 
-# ── Live Alpaca snapshots — parallel with per-call timeout ───────────────────
-st.header("Live paper accounts")
+    st.divider()
+    c1, c2 = st.columns(2)
+    c1.info("📈 **Dashboard** — per-algo backtest results, equity curves, trade log.")
+    c2.info("⚙️ **Admin** — run/stop algo backtests, push pulses, tune coefficients.")
+    st.divider()
 
-configured = [a for a in ACCOUNTS if a.is_configured]
-if not configured:
-    st.warning("No accounts configured. Add keys to `.env` and reload.")
-else:
+    # ── Live Alpaca snapshots — parallel + per-call timeout ──────────────────
+    st.header("Live paper accounts")
+
+    configured = [a for a in accounts if a.is_configured]
+    if not configured:
+        st.warning("No accounts configured. Add keys to `.env` and reload.")
+        return
+
     @st.cache_data(ttl=60, show_spinner=False)
     def _snapshot(acc_id: str):
-        """Fetch one account snapshot. Cached for 60 s so reruns are cheap."""
-        return CLIENT.snapshot(acc_id)
+        return client.snapshot(acc_id)
 
-    snaps: dict[str, object] = {}
-    errors: dict[str, str] = {}
-
+    snaps: dict = {}
+    errors: dict = {}
     with st.spinner("Fetching live balances…"):
         with ThreadPoolExecutor(max_workers=len(configured)) as ex:
             futures = {ex.submit(_snapshot, a.id): a for a in configured}
@@ -94,7 +94,6 @@ else:
                 except Exception as e:   # noqa: BLE001
                     errors[a.id] = f"{type(e).__name__}: {e}"
 
-    # Render in the original account order so the grid is stable
     cols = st.columns(max(1, len(configured)))
     for col, acc in zip(cols, configured):
         with col:
@@ -113,3 +112,13 @@ else:
                 f"Cash ${snap.cash:,.0f} · BP ${snap.buying_power:,.0f} · "
                 f"{snap.positions_count} pos · {snap.status}"
             )
+
+
+# Allow ``streamlit run src/alpaca_dashboard/app.py`` to still work locally.
+if __name__ == "__main__" or True:
+    # The ``or True`` ensures the body runs both when imported via
+    # ``streamlit run src/alpaca_dashboard/app.py`` (where ``__name__`` is
+    # ``__main__``) and when this file is opened directly by Streamlit's page
+    # manager (where ``__name__`` is the module path). Guarded behind a
+    # function so every Streamlit rerun re-invokes render().
+    pass

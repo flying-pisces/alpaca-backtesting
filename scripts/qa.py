@@ -46,23 +46,37 @@ def log(msg: str) -> None:
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def wait_for_content(page: Page, text: str, timeout_ms: int = 60_000) -> bool:
-    """Streamlit streams content via websocket; page.goto returning does not
-    mean body-rendered. Poll for visible text (survives cold-start)."""
-    try:
-        page.get_by_text(text, exact=False).first.wait_for(
-            state="visible", timeout=timeout_ms,
-        )
-        return True
-    except Exception:
-        return False
+def app_frame(page: Page):
+    """Streamlit Cloud wraps the app in an iframe at ``/~/+/``. Interactions
+    with the sidebar, buttons, tables, etc. must all go through that frame."""
+    # Walk frames; the app frame is the one whose URL contains '/~/+/'
+    for f in page.frames:
+        if "/~/+/" in f.url:
+            return f
+    return page.main_frame
+
+
+def wait_for_content(page: Page, text: str, timeout_ms: int = 120_000) -> bool:
+    """Poll the app iframe for visible text (survives cold-start + rerun)."""
+    deadline = time.time() + timeout_ms / 1000
+    while time.time() < deadline:
+        f = app_frame(page)
+        try:
+            body = f.evaluate("() => document.body && document.body.innerText || ''")
+        except Exception:
+            body = ""
+        if text in (body or ""):
+            return True
+        page.wait_for_timeout(1000)
+    return False
 
 
 def text_on_page(page: Page) -> str:
-    """Visible text of the page body — works for Streamlit's widget DOM
-    where page.content() misses renderer-shadow markup."""
+    """Visible innerText of the app iframe (not the top frame)."""
     try:
-        return page.evaluate("() => document.body.innerText")
+        return app_frame(page).evaluate(
+            "() => document.body && document.body.innerText || ''"
+        )
     except Exception:
         return ""
 
@@ -71,13 +85,20 @@ def text_on_page(page: Page) -> str:
 def qa_home(page: Page) -> dict:
     log("→ /")
     page.goto(APP_URL, wait_until="domcontentloaded", timeout=90_000)
-    # Streamlit Community Cloud cold-starts can take 30-60s — wait long.
-    got_content = wait_for_content(page, "Live paper accounts", timeout_ms=120_000)
-    page.wait_for_timeout(2000)   # let dataframes paint after Streamlit rerun
+    # The tables render first (no API); wait for that as the "app alive" signal.
+    got_tables = wait_for_content(page, "Ready algos", timeout_ms=180_000)
+    # Then wait a bit more for the Live paper accounts section + snapshots.
+    got_snaps = wait_for_content(page, "Live paper accounts", timeout_ms=30_000)
+    page.wait_for_timeout(5000)   # let snapshots paint after ThreadPool returns
     p = shot(page, "home")
 
     body = text_on_page(page)
-    results = {"screenshot": str(p), "loaded": got_content}
+    results = {
+        "screenshot": str(p),
+        "tables_loaded": got_tables,
+        "snaps_section_loaded": got_snaps,
+        "body_chars": len(body),
+    }
 
     if "No accounts configured" in body:
         results["secrets_ok"] = False
@@ -86,6 +107,7 @@ def qa_home(page: Page) -> dict:
 
     results["secrets_ok"] = True
 
+    # Account names are inside <metric> widgets — check each
     for name in ["Degen", "Surge", "Moderate", "Sentinel", "Fortress",
                  "Reddit Play", "ER Play", "Dividend Play"]:
         if name not in body:
