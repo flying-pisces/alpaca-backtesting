@@ -29,17 +29,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from . import store
-from .backtest import (
-    ALGOS,
-    DEFAULT_DTE_MAP,
-    DEFAULT_TICKERS,
-    _compute_hv,
-    _compute_pgi,
-    _compute_rsi,
-    _json_safe,
-)
+from .backtest import ALGOS, DEFAULT_DTE_MAP, DEFAULT_TICKERS
 from .classify import build_regime_series, classify_cap, classify_regime
 from .data_cache import BARS_CACHE, fetch_bars
+from .indicators import compute_hv, compute_pgi, compute_rsi, json_safe
 from .strategies import select_strategy_for_tier
 
 log = logging.getLogger(__name__)
@@ -112,9 +105,9 @@ def state_snapshot() -> dict:
 def _compute_live_indicators(closes: list[float], idx: int) -> dict:
     """Same blend as backtest._json_safe-adjacent indicators, sampled at
     the latest bar so the live pulse carries the values the signal used."""
-    pgi = _compute_pgi(closes, idx)
-    hv = _compute_hv(closes[:idx + 1])
-    rsi_series = _compute_rsi(closes[:idx + 1])
+    pgi = compute_pgi(closes, idx)
+    hv = compute_hv(closes[:idx + 1])
+    rsi_series = compute_rsi(closes[:idx + 1])
     rsi14 = rsi_series[idx] if idx < len(rsi_series) else float("nan")
     sma20 = sum(closes[idx - 19:idx + 1]) / 20 if idx >= 19 else float("nan")
     sma50 = sum(closes[idx - 49:idx + 1]) / 50 if idx >= 49 else float("nan")
@@ -178,7 +171,7 @@ def _emit_pulse(algo: str, ticker: str, S: float, sigma: float, pgi: float,
         "outcome_pnl_pct": None,
         "selection_reason": (strat.get("selection_reason") or "")[:200],
         "job_id": f"go_live_{algo}",
-        "top_rec_json": json.dumps(_json_safe(strat)),
+        "top_rec_json": json.dumps(json_safe(strat)),
         "indicators_json": json.dumps(indicators),
         "market_regime": regime,
         "cap_bucket": cap,
@@ -230,7 +223,7 @@ def _run_cycle() -> dict:
 
             indicators = _compute_live_indicators(closes, idx)
             pgi = indicators["pgi"]
-            sigma = max(_compute_hv(closes[:idx + 1]) * 1.15, 0.10)
+            sigma = max(compute_hv(closes[:idx + 1]) * 1.15, 0.10)
             regime = classify_regime(regime_series, today)
             cap = classify_cap(ticker)
 

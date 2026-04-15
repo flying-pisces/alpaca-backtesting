@@ -15,20 +15,26 @@ and target-DTE. Kept small so the user can tune from /admin sliders.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
-import statistics
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Callable
-
-import json
 
 from . import store
 from .classify import build_regime_series, classify_cap, classify_regime
 from .historical_data import fetch_history
+from .indicators import compute_hv, compute_pgi, compute_rsi, json_safe
 from .strategies import select_strategy_for_tier
+
+# Backwards-compat aliases — kept so any existing imports of the old
+# underscore names still work after the module split.
+_compute_rsi = compute_rsi
+_compute_hv = compute_hv
+_compute_pgi = compute_pgi
+_json_safe = json_safe
 
 log = logging.getLogger(__name__)
 
@@ -48,66 +54,8 @@ DEFAULT_PGI_ENTRY = 0.0        # |pgi| >= this to take a signal
 DEFAULT_SIZE_MULT = 1.0        # scales the strategy's nominal position sizing
 
 
-# ── indicator helpers (copied from market_pulse, unchanged math) ──────────────
-
-def _compute_rsi(closes: list[float], period: int = 14) -> list[float]:
-    n = len(closes)
-    result = [float("nan")] * n
-    if n < period + 1:
-        return result
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        d = closes[i] - closes[i - 1]
-        gains.append(max(d, 0))
-        losses.append(max(-d, 0))
-    avg_g = sum(gains) / period
-    avg_l = sum(losses) / period
-    result[period] = 100 - 100 / (1 + avg_g / avg_l) if avg_l else 100.0
-    for i in range(period + 1, n):
-        d = closes[i] - closes[i - 1]
-        avg_g = (avg_g * (period - 1) + max(d, 0)) / period
-        avg_l = (avg_l * (period - 1) + max(-d, 0)) / period
-        result[i] = 100 - 100 / (1 + avg_g / avg_l) if avg_l else 100.0
-    return result
-
-
-def _compute_hv(closes: list[float], window: int = 20) -> float:
-    if len(closes) < window + 1:
-        return 0.22
-    returns = [math.log(closes[i] / closes[i - 1])
-               for i in range(len(closes) - window, len(closes))
-               if closes[i - 1] > 0]
-    if len(returns) < 5:
-        return 0.22
-    return statistics.stdev(returns) * math.sqrt(252)
-
-
-def _json_safe(obj):
-    """Best-effort conversion of strategy-dict contents (which may contain
-    ``datetime.date`` or similar) into JSON-serialisable primitives."""
-    if obj is None or isinstance(obj, (bool, int, float, str)):
-        return obj
-    if isinstance(obj, (date, datetime)):
-        return obj.isoformat()
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(v) for v in obj]
-    if isinstance(obj, dict):
-        return {str(k): _json_safe(v) for k, v in obj.items()}
-    return str(obj)
-
-
-def _compute_pgi(closes: list[float], idx: int) -> float:
-    if idx < 50:
-        return 0.0
-    S = closes[idx]
-    sma20 = sum(closes[idx - 19:idx + 1]) / 20
-    sma50 = sum(closes[idx - 49:idx + 1]) / 50
-    mom = (S - sma20) / sma20 if sma20 > 0 else 0
-    mom50 = (S - sma50) / sma50 if sma50 > 0 else 0
-    rsi_vals = _compute_rsi(closes[:idx + 1])
-    rsi = rsi_vals[idx] if idx < len(rsi_vals) and not math.isnan(rsi_vals[idx]) else 50
-    pgi = (mom * 200 * 0.4) + (mom50 * 200 * 0.3) + ((rsi - 50) / 50 * 100 * 0.3)
-    return max(-100.0, min(100.0, round(pgi, 1)))
+# Indicator helpers live in .indicators — aliased above for backwards
+# compatibility with any code still importing the underscored names.
 
 
 # ── walk-forward outcome evaluators (stock + option) ──────────────────────────
