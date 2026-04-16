@@ -322,24 +322,40 @@ if engine_state.get("last_error"):
 
 
 # ── Push to market_pulse ─────────────────────────────────────────────────────
-from alpaca_dashboard.ingestion import SqliteDestination, push as push_to_market_pulse
+from alpaca_dashboard.ingestion import HttpDestination, SqliteDestination, push as push_to_market_pulse
 
 st.divider()
 st.header("📤 Push pulses to market_pulse")
 st.caption(
-    "Stream new backtest pulses from Turso into market_pulse's DB. "
-    "Idempotent: only new rows since the last push are sent. "
-    "Cursor and last-run status are persisted per destination."
+    "Stream new pulses from Turso into market_pulse. "
+    "HTTP → production Fly.io (preferred, no lock contention). "
+    "SQLite → local dev. Idempotent; cursor-tracked."
 )
 
 push_c1, push_c2 = st.columns([3, 2])
 with push_c1:
-    dest_path = st.text_input(
-        "market_pulse pulses.db path",
-        value="~/projects/market_pulse/pulses.db",
-        help="Local path to market_pulse's SQLite file. Writes via INSERT OR "
-             "IGNORE so re-running is safe.",
+    dest_mode = st.radio(
+        "Destination",
+        ["HTTP (production)", "SQLite (local)"],
+        horizontal=True,
+        index=0 if os.getenv("INGEST_API_KEY") else 1,
     )
+    if dest_mode.startswith("HTTP"):
+        ingest_key = os.getenv("INGEST_API_KEY", "")
+        st.text_input(
+            "INGEST_API_KEY",
+            value="•" * min(len(ingest_key), 20) if ingest_key else "",
+            disabled=True,
+            help="Set via .env or Streamlit Cloud Secrets.",
+        )
+        dest_obj = HttpDestination(auth_token=ingest_key)
+    else:
+        dest_path = st.text_input(
+            "market_pulse pulses.db path",
+            value="~/projects/market_pulse/pulses.db",
+        )
+        dest_obj = SqliteDestination(dest_path)
+
     push_algo = st.selectbox(
         "Restrict to algo (optional)",
         options=["(all)"] + [a.id for a in ALGOS if a.is_ready],
@@ -352,32 +368,20 @@ with push_c1:
 
 with push_c2:
     try:
-        dest_preview = SqliteDestination(dest_path)
-        ok, msg = dest_preview.healthcheck()
+        ok, msg = dest_obj.healthcheck()
         if ok:
-            st.success(f"Destination reachable · {msg[:60]}")
+            st.success(f"✅ {msg[:80]}")
         else:
-            st.error(f"Destination check: {msg}")
+            st.error(f"Destination: {msg}")
     except Exception as e:
-        st.error(f"Bad path: {e}")
+        st.error(f"Bad destination: {e}")
         ok = False
 
-    # Guard against stale module cache on Streamlit Cloud — diagnostic path
-    # prints what attrs `store` actually has if ``get_ingestion_cursor`` is
-    # missing, so we can see whether the module really is stale.
     existing_cursor = None
     try:
-        existing_cursor = store.get_ingestion_cursor(
-            f"sqlite:{Path(dest_path).expanduser().resolve()}"
-        )
-    except AttributeError:
-        names = [n for n in dir(store) if not n.startswith("_")]
-        st.warning(
-            "⚠️ store module missing `get_ingestion_cursor` — stale import. "
-            f"Attrs: `{', '.join(names[:20])}{'…' if len(names) > 20 else ''}`"
-        )
-    except Exception as e:   # noqa: BLE001
-        st.error(f"cursor lookup failed: {type(e).__name__}: {e}")
+        existing_cursor = store.get_ingestion_cursor(dest_obj.name)
+    except Exception:  # noqa: BLE001
+        pass
     if existing_cursor:
         st.caption(
             f"Last push: **{existing_cursor.get('last_pushed_count', 0)}** rows · "
@@ -391,7 +395,7 @@ with push_c2:
 if run_push:
     with st.spinner("pushing…"):
         result = push_to_market_pulse(
-            SqliteDestination(dest_path),
+            dest_obj,
             algo_id=None if push_algo == "(all)" else push_algo,
             batch_size=200,
             reset_cursor=push_reset,

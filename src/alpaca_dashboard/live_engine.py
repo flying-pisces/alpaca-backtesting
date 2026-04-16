@@ -288,22 +288,32 @@ def _auto_push() -> None:
     can see when it first gets through (usually right after market close).
     """
     global _LAST_PUSH_WRITTEN
-    dest_path = os.getenv("AUTO_PUSH_SQLITE_PATH", "").strip()
-    if not dest_path:
-        return
-    try:
-        from .ingestion import SqliteDestination, push
-        dest = SqliteDestination(dest_path)
-        ok, msg = dest.healthcheck()
-        if not ok:
-            return
-        result = push(dest, batch_size=500)
-        if result.total_written:
-            _LAST_PUSH_WRITTEN += result.total_written
-            log.info(f"auto-push: +{result.total_written} rows → {dest.name} "
-                     f"(cumulative: {_LAST_PUSH_WRITTEN})")
-    except Exception:  # noqa: BLE001
-        pass   # transient lock — silent, cursor persists, next cycle retries
+    from .ingestion import HttpDestination, SqliteDestination, push
+
+    destinations: list = []
+
+    # Prefer HTTP if INGEST_API_KEY is set (bypasses SQLite lock entirely).
+    ingest_key = os.getenv("INGEST_API_KEY", "").strip()
+    if ingest_key:
+        destinations.append(HttpDestination(auth_token=ingest_key))
+
+    # SQLite fallback / additional destination.
+    sqlite_path = os.getenv("AUTO_PUSH_SQLITE_PATH", "").strip()
+    if sqlite_path:
+        destinations.append(SqliteDestination(sqlite_path))
+
+    for dest in destinations:
+        try:
+            ok, msg = dest.healthcheck()
+            if not ok:
+                continue
+            result = push(dest, batch_size=500)
+            if result.total_written:
+                _LAST_PUSH_WRITTEN += result.total_written
+                log.info(f"auto-push: +{result.total_written} rows → {dest.name} "
+                         f"(cumulative: {_LAST_PUSH_WRITTEN})")
+        except Exception:  # noqa: BLE001
+            pass   # transient error — cursor persists, next cycle retries
 
 
 def _loop() -> None:

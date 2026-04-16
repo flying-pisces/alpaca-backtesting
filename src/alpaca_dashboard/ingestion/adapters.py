@@ -123,31 +123,74 @@ class SqliteDestination(PulseDestination):
         raise last_err  # type: ignore[misc]
 
 
-# ── HttpDestination (stub) ───────────────────────────────────────────────────
+# ── HttpDestination ──────────────────────────────────────────────────────────
+
+MAX_HTTP_BATCH = 500   # server-side cap per request
+
 
 class HttpDestination(PulseDestination):
-    """Post a batch to a future market_pulse ingestion endpoint.
+    """POST a batch of pulses to market_pulse's ``/api/ingest-pulses``.
 
-    market_pulse does not expose one today. When it does, implement this
-    class as a thin ``requests.post`` with Bearer auth (market_pulse uses
-    JWT — see ``backend/auth.py:35-45`` in their repo). The pipeline code
-    does not need to change.
+    The endpoint lives at ``signalpro-pulse.fly.dev`` and is authenticated
+    with a service-to-service Bearer token (``INGEST_API_KEY`` on the
+    server side — NOT a user JWT). Request body is
+    ``{"pulses": [{...}, ...]}``, max 500 per request. Response is
+    ``{"inserted": N, "skipped": M, "total": N+M}``.
+
+    Reference: ``ref/market_pulse/backend/server.py:10127-10182``.
     """
 
-    def __init__(self, base_url: str, auth_token: str, *,
-                 path: str = "/api/ingest-pulses"):
+    def __init__(
+        self,
+        base_url: str = "https://signalpro-pulse.fly.dev",
+        auth_token: str | None = None,
+        *,
+        path: str = "/api/ingest-pulses",
+    ):
         self.base_url = base_url.rstrip("/")
         self.path = path
-        self.auth_token = auth_token
+        self.auth_token = auth_token or ""
         self.name = f"http:{self.base_url}{self.path}"
+        self._url = f"{self.base_url}{self.path}"
+        self._health_url = f"{self._url}/health"
+
+    def _headers(self) -> dict[str, str]:
+        h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.auth_token:
+            h["Authorization"] = f"Bearer {self.auth_token}"
+        return h
 
     def healthcheck(self) -> tuple[bool, str]:
-        return False, "HttpDestination not implemented yet (waiting on market_pulse endpoint)"
+        import requests
+        if not self.auth_token:
+            return False, "INGEST_API_KEY not set"
+        try:
+            r = requests.get(self._health_url, headers=self._headers(), timeout=10)
+            if r.ok:
+                return True, f"ok — {self._url}"
+            return False, f"health {r.status_code}: {r.text[:200]}"
+        except Exception as e:
+            return False, f"unreachable: {e}"
 
     def write(self, rows: Iterable[dict[str, Any]]) -> int:
-        raise NotImplementedError(
-            "HttpDestination.write is a stub. market_pulse needs an "
-            "/api/ingest-pulses endpoint before this can be wired up. "
-            "See ref/market_pulse/backend/server.py; pattern similar to "
-            "/api/save-ai-pulse (line 5412) with batch support."
-        )
+        import requests
+        rows = list(rows)
+        if not rows:
+            return 0
+        total_inserted = 0
+        # Respect the server's 500-per-request cap.
+        for i in range(0, len(rows), MAX_HTTP_BATCH):
+            batch = rows[i : i + MAX_HTTP_BATCH]
+            r = requests.post(
+                self._url,
+                json={"pulses": batch},
+                headers=self._headers(),
+                timeout=30,
+            )
+            if not r.ok:
+                raise RuntimeError(
+                    f"ingest-pulses {r.status_code}: {r.text[:300]}"
+                )
+            body = r.json()
+            total_inserted += body.get("inserted", 0)
+        return total_inserted

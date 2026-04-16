@@ -65,11 +65,11 @@ def main() -> int:
     if args.sqlite:
         dest = SqliteDestination(args.sqlite)
     else:
-        token = args.http_token or __import__("os").getenv("HTTP_INGEST_TOKEN", "")
+        token = args.http_token or __import__("os").getenv("INGEST_API_KEY", "")
         if not token:
-            print("--http-url requires --http-token or HTTP_INGEST_TOKEN env var", file=sys.stderr)
+            print("--http-url requires --http-token or INGEST_API_KEY env var", file=sys.stderr)
             return 2
-        dest = HttpDestination(args.http_url, token)
+        dest = HttpDestination(base_url=args.http_url, auth_token=token)
 
     store.init_db()
 
