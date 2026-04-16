@@ -27,6 +27,7 @@ import streamlit as st
 
 try:
     from alpaca_dashboard import live_engine, store
+    from alpaca_dashboard.pulse_chart import build_pulse_chart
     from alpaca_dashboard.settings import load_algos
 except Exception:   # noqa: BLE001
     import traceback
@@ -202,15 +203,76 @@ for r in ordered:
         if r.get("selection_reason"):
             st.caption(f"_{r['selection_reason']}_")
 
-        with st.expander("Strategy + indicator JSON", expanded=False):
+        # ── Interactive chart (same visual as market_pulse web/iOS) ───────
+        is_pinned = (pulse_id == pin_id)
+        with st.expander(
+            "📈 Price chart · P&L · expected move",
+            expanded=is_pinned,
+        ):
+            fig = build_pulse_chart(r)
+            if fig:
+                st.plotly_chart(fig, use_container_width=False,
+                                key=f"chart_{pulse_id}")
+            else:
+                st.caption(f"Chart unavailable — no price data for {r.get('ticker')}")
+
+            # Strategy detail table (same info as market_pulse pulse card)
+            strat_data = {}
             try:
-                st.json(json.loads(r.get("top_rec_json") or "{}"))
+                strat_data = json.loads(r.get("top_rec_json") or "{}")
             except Exception:
-                st.caption("top_rec_json unparseable")
+                pass
+
+            if strat_data:
+                detail_cols = st.columns(4)
+                detail_cols[0].metric(
+                    "Strategy",
+                    strat_data.get("strategy_label") or strat_data.get("strategy_type") or "—",
+                )
+                strike = strat_data.get("strike")
+                if strike:
+                    detail_cols[1].metric("Strike", f"${float(strike):.2f}")
+                pop = strat_data.get("prob_profit")
+                if pop:
+                    detail_cols[2].metric("PoP", f"{float(pop):.0f}%")
+                rr = None
+                mc = strat_data.get("max_profit")
+                ml = strat_data.get("max_loss")
+                if mc and ml and float(ml) != 0:
+                    rr = abs(float(mc) / float(ml))
+                if rr:
+                    detail_cols[3].metric("R/R", f"{rr:.2f}")
+
+                legs = strat_data.get("legs")
+                if legs:
+                    st.caption("**Legs:**")
+                    for leg in legs:
+                        leg_type = leg.get("type", "—")
+                        leg_strike = leg.get("strike", "—")
+                        leg_delta = leg.get("delta", "")
+                        st.caption(
+                            f"  {leg_type.upper()} K=${leg_strike} "
+                            f"{'Δ=' + str(round(float(leg_delta), 2)) if leg_delta else ''}"
+                        )
+
+            # Indicator snapshot
+            ind = {}
             try:
-                st.json(json.loads(r.get("indicators_json") or "{}"))
+                ind = json.loads(r.get("indicators_json") or "{}")
             except Exception:
-                st.caption("indicators_json unparseable")
+                pass
+            if ind:
+                ind_cols = st.columns(6)
+                for i, (k, v) in enumerate(ind.items()):
+                    if i < 6 and v is not None:
+                        ind_cols[i].metric(k.upper(), f"{v}")
+
+            # Raw JSON (collapsed further)
+            with st.expander("Raw JSON", expanded=False):
+                try:
+                    st.json(strat_data)
+                except Exception:
+                    pass
 
 
 # ── Auto-refresh while the engine is running so the feed stays live ─────────

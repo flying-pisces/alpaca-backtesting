@@ -377,7 +377,24 @@ def test_pipeline():
     return f"push1: {r1.total_written} written, push2: {r2.total_read} re-read (idempotent)"
 
 
-# ── 14. SqliteDestination healthcheck ────────────────────────────────────────
+# ── 14. Pulse chart ─────────────────────────────────────────────────────────
+
+@check("pulse_chart.build_pulse_chart (renders for live pulse)")
+def test_pulse_chart():
+    from alpaca_dashboard.pulse_chart import build_pulse_chart
+    rows = [r for r in store.all_pulses(limit=50)
+            if (r.get("job_id") or "").startswith("go_live_")]
+    if not rows:
+        rows = store.all_pulses(limit=5)
+    assert rows, "no pulses in store to chart"
+    fig = build_pulse_chart(rows[0])
+    assert fig is not None, f"chart returned None for {rows[0].get('ticker')}"
+    assert len(fig.data) >= 1, "no traces"
+    assert len(fig.layout.shapes) >= 2, "missing reference lines"
+    return f"{rows[0]['ticker']} → {len(fig.data)} traces, {len(fig.layout.shapes)} shapes"
+
+
+# ── 15. SqliteDestination healthcheck ────────────────────────────────────────
 
 @check("SqliteDestination.healthcheck (schema validation)")
 def test_sqlite_health():
@@ -449,6 +466,7 @@ def main():
         test_strategy()
         test_backtest()
         test_live_cycle()
+        test_pulse_chart()
         test_http_health()
         test_http_push()
         test_pipeline()
