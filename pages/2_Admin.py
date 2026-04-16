@@ -133,11 +133,35 @@ for algo in ready_algos:
                 step=0.25,
                 key=f"sm_{algo.id}",
             )
+            st.divider()
+            st.subheader("Execution")
+            exec_enabled = st.toggle(
+                "Auto-execute trades on paper account",
+                value=bool(current.get("execution_enabled", False)),
+                key=f"exec_{algo.id}",
+                help="When ON, live pulses auto-submit stock market orders "
+                     "on this algo's Alpaca paper account.",
+            )
+            exec_size = st.number_input(
+                "Trade size ($)",
+                min_value=100, max_value=10000, step=100,
+                value=int(current.get("execution_size_usd", 500)),
+                key=f"exec_size_{algo.id}",
+            )
+            max_pos = st.number_input(
+                "Max open positions",
+                min_value=1, max_value=50, step=1,
+                value=int(current.get("max_positions", 10)),
+                key=f"max_pos_{algo.id}",
+            )
             if st.button("Save", key=f"save_{algo.id}"):
                 store.set_coefficients(algo.id, {
                     "target_dte": target_dte,
                     "pgi_entry": pgi_entry,
                     "size_mult": size_mult,
+                    "execution_enabled": exec_enabled,
+                    "execution_size_usd": exec_size,
+                    "max_positions": max_pos,
                 })
                 st.success("Saved — applies to subsequent runs.")
                 st.rerun()
@@ -408,6 +432,45 @@ if run_push:
             f"{result.batches} batches · {result.elapsed_sec:.1f}s"
         )
     st.json(result.as_dict())
+
+# ── Paper account positions + orders ──────────────────────────────────────────
+from alpaca_dashboard.order_executor import get_account_summary
+
+st.divider()
+st.header("📊 Paper account positions")
+st.caption("Real-time equity + P&L from each algo's Alpaca paper account.")
+
+ready = [a for a in ALGOS if a.is_ready]
+acct_cols = st.columns(min(len(ready), 5))
+for i, algo in enumerate(ready):
+    with acct_cols[i % len(acct_cols)]:
+        s = get_account_summary(algo.id)
+        if s:
+            delta_str = f"{s['pnl_today']:+,.2f}" if s["pnl_today"] else "0"
+            st.metric(
+                label=f"{algo.emoji} {algo.name}",
+                value=f"${s['equity']:,.0f}",
+                delta=f"${delta_str} today",
+            )
+            coefs = store.get_coefficients(algo.id)
+            exec_on = "🟢 executing" if coefs.get("execution_enabled") else "⚪ off"
+            st.caption(f"{exec_on} · {s['positions']} pos · BP ${s['buying_power']:,.0f}")
+        else:
+            st.metric(label=f"{algo.emoji} {algo.name}", value="—")
+
+# Recent orders
+st.subheader("Recent orders")
+recent_orders = store.all_orders(limit=50)
+if recent_orders:
+    import pandas as pd
+    odf = pd.DataFrame(recent_orders)
+    show_cols = [c for c in [
+        "submitted_at", "algo_id", "ticker", "side", "qty",
+        "status", "fill_price", "pnl", "client_order_id",
+    ] if c in odf.columns]
+    st.dataframe(odf[show_cols], width="stretch", hide_index=True)
+else:
+    st.caption("No orders yet. Enable execution on an algo and wait for the next live cycle.")
 
 # Auto-refresh while anything is running
 if any(j["alive"] for j in all_jobs):

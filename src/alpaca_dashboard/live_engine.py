@@ -180,6 +180,26 @@ def _emit_pulse(algo: str, ticker: str, S: float, sigma: float, pgi: float,
     }
     store.save_pulse(row)
 
+    # Auto-execute on the algo's paper account if enabled.
+    try:
+        from .order_executor import execute_pulse, is_execution_enabled
+        if is_execution_enabled(algo):
+            result = execute_pulse(
+                algo_id=algo,
+                pulse_id=pulse_id,
+                ticker=ticker,
+                pgi=pgi,
+                entry_price=S,
+                strategy_type=stype,
+            )
+            if result.success:
+                log.info(f"executed {result.side} {result.qty}× {ticker} "
+                         f"for {algo} (order={result.order_id})")
+            elif result.error and "neutral" not in result.error:
+                log.debug(f"execution skipped: {result.error}")
+    except Exception as e:  # noqa: BLE001
+        log.debug(f"execution failed for {algo}/{ticker}: {e}")
+
 
 def _run_cycle() -> dict:
     """One pass over the universe. Returns per-cycle counters."""

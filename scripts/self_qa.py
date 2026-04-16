@@ -394,7 +394,25 @@ def test_pulse_chart():
     return f"{rows[0]['ticker']} → {len(fig.data)} traces, {len(fig.layout.shapes)} shapes"
 
 
-# ── 15. SqliteDestination healthcheck ────────────────────────────────────────
+# ── 15. Order executor ──────────────────────────────────────────────────────
+
+@check("order_executor (execution disabled by default)")
+def test_execution_disabled():
+    from alpaca_dashboard.order_executor import is_execution_enabled
+    assert not is_execution_enabled("degen"), "should be disabled by default"
+    return "disabled OK"
+
+
+@check("order_executor.get_account_summary (degen)")
+def test_account_summary():
+    from alpaca_dashboard.order_executor import get_account_summary
+    s = get_account_summary("degen")
+    assert s is not None, "no summary returned"
+    assert s["equity"] > 0, f"zero equity: {s}"
+    return f"equity=${s['equity']:,.0f}, positions={s['positions']}"
+
+
+# ── 16. SqliteDestination healthcheck ────────────────────────────────────────
 
 @check("SqliteDestination.healthcheck (schema validation)")
 def test_sqlite_health():
@@ -467,6 +485,8 @@ def main():
         test_backtest()
         test_live_cycle()
         test_pulse_chart()
+        test_execution_disabled()
+        test_account_summary()
         test_http_health()
         test_http_push()
         test_pipeline()

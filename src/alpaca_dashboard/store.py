@@ -17,7 +17,7 @@ from __future__ import annotations
 # Cloud's hot-reload only touches files present in the commit diff, so
 # cross-file additions (e.g. new helpers used only by downstream pages)
 # can go unnoticed. The marker keeps this file in every such diff.
-STORE_VERSION = "2026-04-16.3"
+STORE_VERSION = "2026-04-16.4"
 
 import json
 import logging
@@ -239,6 +239,24 @@ _SCHEMA_TABLES = [
         error      TEXT
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS orders (
+        order_id        TEXT PRIMARY KEY,
+        pulse_id        TEXT,
+        algo_id         TEXT NOT NULL,
+        ticker          TEXT NOT NULL,
+        side            TEXT NOT NULL,
+        qty             INTEGER,
+        status          TEXT,
+        fill_price      REAL,
+        client_order_id TEXT,
+        submitted_at    TEXT,
+        filled_at       TEXT,
+        pnl             REAL,
+        pnl_pct         REAL,
+        created_at      TEXT DEFAULT (datetime('now'))
+    )
+    """,
 ]
 
 
@@ -413,6 +431,50 @@ def set_ingestion_cursor(
             (destination, last_pushed_created_at, last_pushed_pulse_id,
              last_pushed_count, last_error),
         )
+
+
+# ── Orders ────────────────────────────────────────────────────────────────────
+
+_ORDER_COLS = [
+    "order_id", "pulse_id", "algo_id", "ticker", "side", "qty",
+    "status", "fill_price", "client_order_id", "submitted_at",
+    "filled_at", "pnl", "pnl_pct",
+]
+
+
+def save_order(row: dict[str, Any]) -> None:
+    values = tuple(row.get(c) for c in _ORDER_COLS)
+    placeholders = ",".join("?" * len(_ORDER_COLS))
+    with cursor() as c:
+        c.execute(
+            f"INSERT OR REPLACE INTO orders ({','.join(_ORDER_COLS)}) "
+            f"VALUES ({placeholders})",
+            values,
+        )
+
+
+def all_orders(algo_id: str | None = None, limit: int = 200) -> list[dict]:
+    with cursor() as c:
+        if algo_id:
+            cur = c.execute(
+                "SELECT * FROM orders WHERE algo_id = ? ORDER BY submitted_at DESC LIMIT ?",
+                (algo_id, limit),
+            )
+        else:
+            cur = c.execute(
+                "SELECT * FROM orders ORDER BY submitted_at DESC LIMIT ?",
+                (limit,),
+            )
+        return _rows(cur)
+
+
+def orders_for_pulse(pulse_id: str) -> list[dict]:
+    with cursor() as c:
+        cur = c.execute(
+            "SELECT * FROM orders WHERE pulse_id = ? ORDER BY submitted_at DESC",
+            (pulse_id,),
+        )
+        return _rows(cur)
 
 
 # ── Coefficients ──────────────────────────────────────────────────────────────

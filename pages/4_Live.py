@@ -27,6 +27,7 @@ import streamlit as st
 
 try:
     from alpaca_dashboard import live_engine, store
+    from alpaca_dashboard.order_executor import is_execution_enabled
     from alpaca_dashboard.pulse_chart import build_pulse_chart
     from alpaca_dashboard.settings import load_algos
 except Exception:   # noqa: BLE001
@@ -179,6 +180,19 @@ for r in ordered:
         # Sharable permalink directly below the label
         st.markdown(f"[🔗 Share this pulse]({link})")
         st.code(link, language="text")
+
+        # Order status badge (if execution was triggered for this pulse)
+        pulse_orders = store.orders_for_pulse(pulse_id)
+        if pulse_orders:
+            o = pulse_orders[0]
+            badge_color = "green" if o.get("status") == "filled" else "orange"
+            st.markdown(
+                f"💰 **Order:** {o.get('side')} {o.get('qty')}× {o.get('ticker')} "
+                f"— status: **{o.get('status')}** "
+                f"{'· fill $' + str(round(float(o['fill_price']), 2)) if o.get('fill_price') else ''}"
+            )
+        elif is_execution_enabled(algo_id):
+            st.caption("⚡ Execution enabled — order pending or PGI too neutral")
 
         top = st.columns([1, 1, 1, 1, 1])
         top[0].metric("Ticker", r.get("ticker") or "—")
