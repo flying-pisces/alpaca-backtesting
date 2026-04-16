@@ -17,7 +17,7 @@ from __future__ import annotations
 # Cloud's hot-reload only touches files present in the commit diff, so
 # cross-file additions (e.g. new helpers used only by downstream pages)
 # can go unnoticed. The marker keeps this file in every such diff.
-STORE_VERSION = "2026-04-16.4"
+STORE_VERSION = "2026-04-16.5"
 
 import json
 import logging
