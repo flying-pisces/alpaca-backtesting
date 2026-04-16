@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import threading
 import time
 import uuid
@@ -274,10 +275,59 @@ def _run_cycle() -> dict:
 
 # ── Lifecycle ───────────────────────────────────────────────────────────────
 
+_LAST_PUSH_WRITTEN = 0
+
+
+def _auto_push() -> None:
+    """If ``AUTO_PUSH_SQLITE_PATH`` env is set, push new pulses to
+    market_pulse's DB after each cycle.
+
+    During market hours the DB is typically locked by market_pulse's server.
+    Failures are silently retried on the next cycle — the cursor ensures no
+    rows are missed. A successful push is logged at INFO level so the user
+    can see when it first gets through (usually right after market close).
+    """
+    global _LAST_PUSH_WRITTEN
+    dest_path = os.getenv("AUTO_PUSH_SQLITE_PATH", "").strip()
+    if not dest_path:
+        return
+    try:
+        from .ingestion import SqliteDestination, push
+        dest = SqliteDestination(dest_path)
+        ok, msg = dest.healthcheck()
+        if not ok:
+            return
+        result = push(dest, batch_size=500)
+        if result.total_written:
+            _LAST_PUSH_WRITTEN += result.total_written
+            log.info(f"auto-push: +{result.total_written} rows → {dest.name} "
+                     f"(cumulative: {_LAST_PUSH_WRITTEN})")
+    except Exception:  # noqa: BLE001
+        pass   # transient lock — silent, cursor persists, next cycle retries
+
+
 def _loop() -> None:
-    """Daemon body. Stops when ``_STOP_EVENT`` is set."""
+    """Daemon body. Stops when ``_STOP_EVENT`` is set.
+
+    Market-hours gate: if ``is_market_open()`` returns ``False``, the loop
+    sleeps without scanning. This means the engine can be "always on" — it
+    automatically wakes when the market opens and idles off-hours.
+    """
+    from .market_clock import is_market_open
+
     log.info("live engine started")
     while not _STOP_EVENT.is_set():
+        # Gate: skip the scan when the market is closed.
+        if not is_market_open():
+            with _STATE_LOCK:
+                _STATE.last_error = None
+            # Sleep in ticks — check every 30s whether market opened.
+            for _ in range(30):
+                if _STOP_EVENT.is_set():
+                    break
+                time.sleep(1)
+            continue
+
         t0 = time.time()
         try:
             counters = _run_cycle()
@@ -294,6 +344,10 @@ def _loop() -> None:
             _STATE.total_generated += counters["generated"]
             _STATE.total_cycles += 1
             cycle_sec = _STATE.cycle_sec
+
+        # Auto-push to market_pulse after each successful cycle.
+        if counters["generated"] > 0:
+            _auto_push()
 
         # Wait in small ticks so stop() is responsive even mid-cycle.
         elapsed = time.time() - t0

@@ -99,19 +99,28 @@ class SqliteDestination(PulseDestination):
             f"INSERT OR IGNORE INTO pulses ({','.join(TARGET_COLUMNS)}) "
             f"VALUES ({placeholders})"
         )
-        conn = self._connect()
-        try:
-            cur = conn.cursor()
-            cur.executemany(
-                sql,
-                [tuple(r.get(c) for c in TARGET_COLUMNS) for r in rows],
-            )
-            conn.commit()
-            # INSERT OR IGNORE returns total attempted in rowcount on newer
-            # SQLite; fall back to len(rows) if the driver quirks.
-            return cur.rowcount if cur.rowcount >= 0 else len(rows)
-        finally:
-            conn.close()
+        data = [tuple(r.get(c) for c in TARGET_COLUMNS) for r in rows]
+        # market_pulse's server may hold a write lock while it's running.
+        # SQLite in WAL mode allows concurrent readers but serialises writes.
+        # We retry with backoff to wait for a short lock gap.
+        import time
+        last_err = None
+        for attempt in range(5):
+            conn = self._connect()
+            try:
+                cur = conn.cursor()
+                cur.executemany(sql, data)
+                conn.commit()
+                return cur.rowcount if cur.rowcount >= 0 else len(rows)
+            except sqlite3.OperationalError as e:
+                last_err = e
+                if "locked" in str(e).lower() and attempt < 4:
+                    time.sleep(2 ** attempt)   # 1, 2, 4, 8s backoff
+                    continue
+                raise
+            finally:
+                conn.close()
+        raise last_err  # type: ignore[misc]
 
 
 # ── HttpDestination (stub) ───────────────────────────────────────────────────

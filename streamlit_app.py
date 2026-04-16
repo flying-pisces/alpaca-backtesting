@@ -69,6 +69,18 @@ ALGOS = load_algos()
 ALGO_ACC = algo_to_account(ACCOUNTS)
 CLIENT = AlpacaMultiClient(ACCOUNTS)
 
+# ── Auto-start live engine when market is open ───────────────────────────────
+# Idempotent: ``start()`` is a no-op if the engine thread is already alive.
+# Runs all ready algos across the default ticker universe.
+try:
+    from alpaca_dashboard import live_engine
+    from alpaca_dashboard.market_clock import is_market_open
+    if is_market_open() and not live_engine.state_snapshot()["running"]:
+        ready_algo_ids = [a.id for a in ALGOS if a.is_ready]
+        live_engine.start(algos=ready_algo_ids)
+except Exception:   # noqa: BLE001
+    pass   # non-fatal — user can always start manually on /Admin
+
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 st.sidebar.title("📊 Alpaca Algo Dashboard")
 st.sidebar.caption("Home · **Dashboard** · **Admin**  (see page list above)")
