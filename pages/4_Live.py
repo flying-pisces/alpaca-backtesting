@@ -123,7 +123,7 @@ pin_id = (q.get("pulse") or "").strip() if q else ""
 all_rows = store.all_pulses(limit=5000)
 live_rows = [
     r for r in all_rows
-    if (r.get("job_id") or "").startswith("go_live_")
+    if (r.get("job_id") or "").startswith(("go_live_", "ab_live_"))
     and r.get("algo_id") in algo_filter
 ]
 if ticker_text:

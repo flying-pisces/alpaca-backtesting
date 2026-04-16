@@ -39,7 +39,7 @@ _DURATION_BY_ALGO = {
     "dividend_play": "long",
 }
 
-INGESTION_VERSION = "alpaca_backtesting_v1"
+INGESTION_VERSION = "ab"
 
 
 def _score_from_pgi(pgi: float | None) -> int:
@@ -129,7 +129,7 @@ def to_market_pulse_row(our_row: dict[str, Any]) -> dict[str, Any]:
         "generated_at": generated_at,
         "generated_by": INGESTION_VERSION,
         "algo_id": algo_id,
-        "algo_version": "backtest_algo_v2",
+        "algo_version": "ab",
         # Classification
         "risk_level": _RISK_LEVEL_BY_ALGO.get(algo_id, 2),
         "score": _score_from_pgi(pgi),

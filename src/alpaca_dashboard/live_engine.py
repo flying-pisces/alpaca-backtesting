@@ -13,7 +13,7 @@ Design:
   * Dedup: one pulse per (algo, ticker) per ``dedup_window_sec`` (default
     30 min). A new pulse only fires if the PGI has moved > ``pgi_delta``
     points OR the strategy_type changed.
-  * All pulses tagged ``generated_by = "go_live_{algo_id}"`` for easy
+  * All pulses tagged ``generated_by = "ab"`` for easy
     filtering in the dashboard and on market_pulse's side.
 """
 from __future__ import annotations
@@ -171,7 +171,7 @@ def _emit_pulse(algo: str, ticker: str, S: float, sigma: float, pgi: float,
         "outcome_price": None,
         "outcome_pnl_pct": None,
         "selection_reason": (strat.get("selection_reason") or "")[:200],
-        "job_id": f"go_live_{algo}",
+        "job_id": f"ab_live_{algo}",
         "top_rec_json": json.dumps(json_safe(strat)),
         "indicators_json": json.dumps(indicators),
         "market_regime": regime,

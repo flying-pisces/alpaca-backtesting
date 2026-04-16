@@ -271,7 +271,7 @@ def test_live_cycle():
     r = live_engine.run_once()
     assert r["generated"] >= 1, f"0 pulses generated"
     rows = [p for p in store.all_pulses(limit=100)
-            if (p.get("job_id") or "").startswith("go_live_")]
+            if (p.get("job_id") or "").startswith(("go_live_", "ab_live_"))]
     assert len(rows) >= 1
     r0 = rows[0]
     assert r0.get("generated_at"), "missing generated_at"
@@ -384,7 +384,7 @@ def test_pulse_chart():
     from alpaca_dashboard import store as _store
     from alpaca_dashboard.pulse_chart import build_pulse_chart
     rows = [r for r in _store.all_pulses(limit=50)
-            if (r.get("job_id") or "").startswith("go_live_")]
+            if (r.get("job_id") or "").startswith(("go_live_", "ab_live_"))]
     if not rows:
         rows = _store.all_pulses(limit=5)
     assert rows, "no pulses in store to chart"

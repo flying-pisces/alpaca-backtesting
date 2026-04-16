@@ -253,7 +253,7 @@ st.divider()
 st.header("🔴 Live engine — Go Live Pulses")
 st.caption(
     "Scans the universe every N seconds and emits pulses tagged "
-    "`go_live_<algo>`. Shares the same schema as backtest pulses; "
+    "`ab_live_<algo>`. Shares the same schema as backtest pulses; "
     "ingestion converter handles both. Feed is on **/Live**."
 )
 
