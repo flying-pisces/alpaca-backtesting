@@ -381,11 +381,12 @@ def test_pipeline():
 
 @check("pulse_chart.build_pulse_chart (renders for live pulse)")
 def test_pulse_chart():
+    from alpaca_dashboard import store as _store
     from alpaca_dashboard.pulse_chart import build_pulse_chart
-    rows = [r for r in store.all_pulses(limit=50)
+    rows = [r for r in _store.all_pulses(limit=50)
             if (r.get("job_id") or "").startswith("go_live_")]
     if not rows:
-        rows = store.all_pulses(limit=5)
+        rows = _store.all_pulses(limit=5)
     assert rows, "no pulses in store to chart"
     fig = build_pulse_chart(rows[0])
     assert fig is not None, f"chart returned None for {rows[0].get('ticker')}"
